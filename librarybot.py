@@ -545,7 +545,12 @@ async def process_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         found_book = db_data.get_book_by_name(book_name)
     except db_data.NotFoundError:
-        await update.message.reply_text(f"Книга '{book_name}' не найдена. Попробуйте еще раз.")
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"Книга '{book_name}' не найдена. Попробуйте еще раз или вернитесь в меню.",
+            reply_markup=reply_markup
+        )
         return USER_BORROW_BOOK_NAME
 
     if found_book['available_quantity'] <= 0:
@@ -930,7 +935,7 @@ def main() -> None:
             ],
         },
         # Убрана команда /cancel из fallbacks для полной кнопочной навигации
-        fallbacks=[],
+        fallbacks=[CommandHandler("start", start)],
     )
 
     application.add_handler(conv_handler)

@@ -135,17 +135,26 @@ def get_borrowed_books(user_id: int):
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
-def get_book_by_name(name: str):
-    """Ищет книгу по названию (частичное совпадение)."""
+def get_book_by_name(query: str):
+    """Ищет книгу по частичному совпадению в названии ИЛИ имени автора."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, available_quantity FROM books WHERE name ILIKE %s LIMIT 1",
-                (f"%{name}%",)
-            )
+            # Новый SQL-запрос, который объединяет таблицы books и authors
+            sql_query = """
+                SELECT b.id, b.name, b.available_quantity
+                FROM books b
+                JOIN authors a ON b.author_id = a.id
+                WHERE b.name ILIKE %s OR a.name ILIKE %s
+                LIMIT 1
+            """
+            search_pattern = f"%{query}%"
+            # Передаем шаблон поиска для обоих полей (название книги и имя автора)
+            cur.execute(sql_query, (search_pattern, search_pattern))
+            
             row = cur.fetchone()
             if not row:
-                raise NotFoundError("Книга не найдена.")
+                raise NotFoundError("Книга или автор не найдены.")
+            
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
 
