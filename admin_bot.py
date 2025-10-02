@@ -48,6 +48,15 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     return ConversationHandler.END
 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправляет статистику (пока заглушка)."""
+    # TODO: В будущем здесь будет логика подсчета пользователей, книг и т.д.
+    # user_count = db_data.get_user_count() 
+    # book_count = db_data.get_book_count()
+    # await update.message.reply_text(f"Пользователей в базе: {user_count}\nВсего книг: {book_count}")
+
+    await update.message.reply_text("Раздел статистики в разработке.")
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отменяет текущий диалог."""
     await update.message.reply_text("Действие отменено.")
@@ -67,6 +76,8 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start, filters=admin_filter))
     application.add_handler(broadcast_handler)
+
+    application.add_handler(CommandHandler("stats", stats, filters=admin_filter))
 
     print("✅ Админ-бот запущен.")
     application.run_polling()
