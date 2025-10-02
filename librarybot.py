@@ -22,7 +22,7 @@ from db_setup import hash_password
 from tasks import send_telegram_message
 
 # --- ИМПОРТ СЕРВИСОВ И PYWHATKIT ---
-import pywhatkit as kit
+# import pywhatkit as kit
 from twilio.rest import Client
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
@@ -89,17 +89,9 @@ def send_whatsapp_code(contact: str, code: str):
     ОТПРАВЛЯЕТ код через pywhatkit (WhatsApp).
     ТРЕБУЕТ: Установленного WhatsApp Desktop и активной сессии.
     """
-    logger.warning("ВНИМАНИЕ: Используется блокирующая функция pywhatkit. Бот может замедляться.")
-    try:
-        message_body = f"Ваш код для библиотеки: {code}"
-        phone_number_for_kit = contact.lstrip('+')
-
-        kit.sendwhatmsg_instantly(phone_number_for_kit, message_body, wait_time=15, tab_close=True)
-        logger.info(f"Код отправлен через WhatsApp на {contact}. Проверьте WhatsApp Desktop.")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при отправке через pywhatkit: {e}")
-        return False
+    # Эта функция временно отключена, так как pywhatkit не работает в Docker.
+    logger.warning("Попытка отправки через WhatsApp/pywhatkit (отключено в Docker).")
+    return False
 
 
 async def send_local_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> bool:
