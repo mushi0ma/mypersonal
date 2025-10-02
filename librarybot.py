@@ -248,9 +248,12 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     contact_processed = normalize_phone_number(contact_input)
 
     # Проверка на существование
-    if db_data.get_user_by_login(contact_processed):
-        await update.message.reply_text("Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.")
-        return REGISTER_CONTACT
+    try:
+        if db_data.get_user_by_login(contact_processed):
+            await update.message.reply_text("Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.")
+            return REGISTER_CONTACT
+    except db_data.NotFoundError:
+        pass # Пользователь не найден, всё хорошо, продолжаем регистрацию
 
     context.user_data['registration']['contact_info'] = contact_processed
 
@@ -320,12 +323,14 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data['registration']['telegram_id'] = user_info.id
     context.user_data['registration']['telegram_username'] = user_info.username if user_info.username else None
 
-    user_id = db_data.add_user(context.user_data['registration'])
-
-    if user_id:
+    try:
+        user_id = db_data.add_user(context.user_data['registration'])
         await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти, используя /start.")
-    else:
-        await update.message.reply_text("❌ Ошибка при регистрации. Возможно, имя пользователя/контакт уже заняты.")
+    except db_data.UserExistsError:
+         await update.message.reply_text("❌ Ошибка при регистрации. Возможно, имя пользователя/контакт уже заняты.")
+    except Exception as e:
+        logger.error(f"Непредвиденная ошибка при регистрации: {e}")
+        await update.message.reply_text("❌ Произошла системная ошибка при регистрации.")
 
     context.user_data.clear()
     return await start(update, context)
@@ -344,7 +349,7 @@ async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "Введите ваш **контакт** (email, телефон, username) или **ФИО** для входа:",
+        "Введите ваш **контакт** (email, телефон, username) для входа:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -355,27 +360,23 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     contact_input = update.message.text
     contact_processed = normalize_phone_number(contact_input)
 
-    user = db_data.get_user_by_login(contact_processed)
-
-    if not user:
+    try:
+        user = db_data.get_user_by_login(contact_processed)
+        context.user_data['login_user'] = user
+        keyboard = [get_back_button(LOGIN_CONTACT)]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("Введите ваш **пароль**:", reply_markup=reply_markup, parse_mode='Markdown')
+        return LOGIN_PASSWORD
+    except db_data.NotFoundError:
         await update.message.reply_text("Пользователь не найден. Попробуйте еще раз или /start для регистрации.")
         return LOGIN_CONTACT
-
-    context.user_data['login_user'] = user
-
-    keyboard = [get_back_button(LOGIN_CONTACT)]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Введите ваш **пароль**:", reply_markup=reply_markup, parse_mode='Markdown')
-    return LOGIN_PASSWORD
 
 
 async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Проверяет пароль пользователя."""
     user = context.user_data['login_user']
-
     stored_hash = user['password_hash']
     full_name = user['full_name']
-
     input_password = update.message.text
 
     if hash_password(input_password) == stored_hash:
@@ -397,7 +398,7 @@ async def start_forgot_password(update: Update, context: ContextTypes.DEFAULT_TY
 
     keyboard = [get_back_button(LOGIN_CONTACT)]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Введите ваш **контакт** (email, телефон, username) или **ФИО** для сброса пароля:", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("Введите ваш **контакт** (email, телефон, username) для сброса пароля:", reply_markup=reply_markup, parse_mode='Markdown')
     return FORGOT_PASSWORD_CONTACT
 
 
@@ -405,11 +406,11 @@ async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFA
     """Находит пользователя, нормализует контакт и отправляет КОД верификации (Шаг 1)."""
     contact_input = update.message.text
     user_id = update.effective_user.id
-
     contact_processed = normalize_phone_number(contact_input)
-    user = db_data.get_user_by_login(contact_processed)
 
-    if not user:
+    try:
+        user = db_data.get_user_by_login(contact_processed)
+    except db_data.NotFoundError:
         await update.message.reply_text("Пользователь с такими данными не найден. Нажмите 'Назад' чтобы попробовать снова.")
         return FORGOT_PASSWORD_CONTACT
 
@@ -456,13 +457,13 @@ async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return FORGOT_PASSWORD_SET_NEW
 
     login_query = context.user_data['forgot_password_contact']
-    result = db_data.update_user_password(login_query, new_password)
 
-    if result == "Успешно":
+    try:
+        db_data.update_user_password(login_query, new_password)
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти, используя /start.")
-    else:
-        logger.error(f"Ошибка при обновлении пароля через db_data: {result}")
-        await update.message.reply_text(f"❌ Ошибка при обновлении пароля. {result}. Нажмите 'Назад', чтобы попробовать ввести его снова.")
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении пароля через db_data: {e}")
+        await update.message.reply_text(f"❌ Ошибка при обновлении пароля. Нажмите 'Назад', чтобы попробовать ввести его снова.")
         return FORGOT_PASSWORD_SET_NEW
 
     context.user_data.clear()
@@ -568,12 +569,11 @@ async def process_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return USER_RESERVE_BOOK_CONFIRM
 
-    result = db_data.borrow_book(user_id, found_book['id'])
-
-    if result == "Успешно":
+    try:
+        db_data.borrow_book(user_id, found_book['id'])
         await update.message.reply_text(f"✅ Книга '{found_book['name']}' успешно взята.")
-    else:
-        await update.message.reply_text(f"❌ Не удалось взять книгу: {result}")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Не удалось взять книгу: {e}")
 
     return await user_menu(update, context)
 
@@ -643,9 +643,8 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("Ошибка: Неверный выбор книги.")
         return await user_menu(update, context)
 
-    result = db_data.return_book(borrowed_info['borrow_id'], book_id)
-
-    if result == "Успешно":
+    try:
+        db_data.return_book(borrowed_info['borrow_id'], book_id)
         await query.edit_message_text(f"✅ Книга '{book_name}' успешно возвращена.")
 
         # Проверяем, есть ли резервации на эту книгу
@@ -659,9 +658,8 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             # Обновляем статус бронирования, чтобы не уведомлять повторно
             db_data.update_reservation_status(user_to_notify_id, book_id, notified=True)
-
-    else:
-        await query.edit_message_text(f"❌ Не удалось вернуть книгу: {result}")
+    except Exception as e:
+        await query.edit_message_text(f"❌ Не удалось вернуть книгу: {e}")
 
     context.user_data.pop('borrowed_map', None)
     return await user_menu(update, context)
@@ -732,22 +730,25 @@ async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
 
     user_id = context.user_data['current_user']['id']
-    borrowed_books = db_data.get_borrowed_books(user_id)
+    history = db_data.get_user_borrow_history(user_id) # Оценивать можно любую книгу из истории
 
-    if not borrowed_books:
+    if not history:
         keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Вы можете оценить только те книги, которые брали.", reply_markup=reply_markup)
+        await query.edit_message_text("Вы можете оценить только те книги, которые когда-либо брали.", reply_markup=reply_markup)
         return USER_MENU
 
-    message_text = "Выберите книгу, которую хотите оценить:"
+    message_text = "Выберите книгу из вашей истории, которую хотите оценить:"
     keyboard = []
     context.user_data['rating_map'] = {}
 
-    for i, borrowed in enumerate(borrowed_books):
+    # Уникальные книги из истории
+    unique_books = {item['book_name']: item for item in history}.values()
+
+    for i, book in enumerate(unique_books):
         rate_id = f"rate_{i}"
-        keyboard.append([InlineKeyboardButton(f"{i+1}. {borrowed['book_name']}", callback_data=rate_id)])
-        context.user_data['rating_map'][rate_id] = {'book_id': borrowed['book_id'], 'book_name': borrowed['book_name']}
+        keyboard.append([InlineKeyboardButton(f"{i+1}. {book['book_name']}", callback_data=rate_id)])
+        context.user_data['rating_map'][rate_id] = {'book_id': book['book_id'], 'book_name': book['book_name']}
 
     keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="user_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -810,13 +811,11 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = context.user_data['current_user']['id']
     book_info = context.user_data['book_to_rate']
 
-    result = db_data.add_rating(user_id, book_info['book_id'], rating)
-
-    message_text = ""
-    if result == "Успешно":
+    try:
+        db_data.add_rating(user_id, book_info['book_id'], rating)
         message_text = f"✅ Ваша оценка '{rating}' для книги '{book_info['book_name']}' сохранена/обновлена."
-    else:
-        message_text = f"❌ Не удалось сохранить оценку: {result}"
+    except Exception as e:
+        message_text = f"❌ Не удалось сохранить оценку: {e}"
 
     context.user_data.pop('book_to_rate', None)
     context.user_data.pop('rating_map', None)
@@ -857,7 +856,7 @@ def main() -> None:
             REGISTER_CONTACT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact),
                 # Назад: к вводу DOB
-                CallbackQueryHandler(get_name, pattern="^back_REGISTER_DOB$")
+                CallbackQueryHandler(get_name, pattern="^back_REGISTER_DOB$") # Это должно быть get_name, которое переспрашивает DOB
             ],
             REGISTER_VERIFY_CODE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, verify_registration_code),
@@ -872,7 +871,7 @@ def main() -> None:
             REGISTER_PASSWORD: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_password),
                 # Назад: к выбору STATUS
-                CallbackQueryHandler(get_status, pattern="^back_REGISTER_STATUS$")
+                CallbackQueryHandler(verify_registration_code, pattern="^back_REGISTER_STATUS$") # Должно быть verify_code, которое переспрашивает статус
             ],
 
             # --- Вход ---
@@ -913,6 +912,7 @@ def main() -> None:
                 CallbackQueryHandler(select_rating, pattern="^rate_\d+$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
+
             USER_RATE_BOOK_RATING: [
                 # Обработка ввода (текст) или кнопок (callback)
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_rating),
