@@ -22,12 +22,26 @@ services:
     image: redis:6-alpine
     restart: always
 
-  # Основное приложение, где запускаются боты
-  app:
+  # --- НОВЫЙ СЕРВИС ДЛЯ ОСНОВНОГО БОТА ---
+  library_bot:
     build: .
     restart: always
-    # Эта команда запускает обоих ботов одновременно в одном контейнере
-    command: sh -c "python librarybot.py & python admin_bot.py"
+    command: python librarybot.py
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # --- НОВЫЙ СЕРВИС ДЛЯ АДМИН-БОТА ---
+  admin_bot:
+    build: .
+    restart: always
+    command: python admin_bot.py
     volumes:
       - .:/app
     env_file:
