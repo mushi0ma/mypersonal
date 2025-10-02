@@ -6,8 +6,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # --- Загрузка переменных окружения ---
 load_dotenv()
-ADMIN_BOT_TOKEN = os.getenv("8284942434:AAH1DG3KpV3Y0JKvg80PRGvIm74GoVtS0r8")
-ADMIN_TELEGRAM_ID = int(os.getenv("1101597449")) # Загружаем ID админа
+ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN")
+ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
 
 # --- Импорт наших модулей ---
 import db_data
@@ -37,15 +37,15 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Обрабатывает и рассылает сообщение."""
     message_text = update.message.text
     await update.message.reply_text("Начинаю рассылку...")
-    
+
     try:
-        # user_ids = db_data.get_all_user_ids() # Нужна эта функция в db_data.py
-        # for user_id in user_ids:
-        #     send_telegram_message.delay(user_id, message_text)
-        await update.message.reply_text(f"Рассылка завершена. Сообщение отправлено N пользователям.")
+        user_ids = db_data.get_all_user_ids()
+        for user_id in user_ids:
+            send_telegram_message.delay(user_id, message_text)
+        await update.message.reply_text(f"Рассылка запущена для {len(user_ids)} пользователей.")
     except Exception as e:
         await update.message.reply_text(f"Ошибка при рассылке: {e}")
-        
+
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -67,7 +67,7 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start, filters=admin_filter))
     application.add_handler(broadcast_handler)
-    
+
     print("✅ Админ-бот запущен.")
     application.run_polling()
 
