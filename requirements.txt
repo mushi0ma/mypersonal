@@ -1,0 +1,8 @@
+python-telegram-bot
+psycopg2-binary
+python-dotenv
+celery
+redis
+sendgrid
+twilio
+pywhatkit
