@@ -54,7 +54,7 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
 # --- СОСТОЯНИЯ ДИАЛОГА ---
 (
     START_ROUTES,
-    REGISTER_NAME, REGISTER_DOB, REGISTER_CONTACT, REGISTER_VERIFY_CODE, REGISTER_STATUS, REGISTER_PASSWORD,
+    REGISTER_NAME, REGISTER_DOB, REGISTER_CONTACT, REGISTER_VERIFY_CODE, REGISTER_STATUS, REGISTER_USERNAME, REGISTER_PASSWORD,
     LOGIN_CONTACT, LOGIN_PASSWORD,
     FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE, FORGOT_PASSWORD_SET_NEW,
     # Новые состояния для пользовательского меню
@@ -63,7 +63,7 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     USER_RESERVE_BOOK_CONFIRM,
     # Новое состояние для истории
     USER_VIEW_HISTORY
-) = range(19)
+) = range(20)
 
 
 # --------------------------
@@ -292,15 +292,32 @@ async def verify_registration_code(update: Update, context: ContextTypes.DEFAULT
 
 
 async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает статус и просит ввести пароль."""
+    """Получает статус и просит ввести юзернейм."""
     query = update.callback_query
     await query.answer()
     context.user_data['registration']['status'] = query.data
 
     reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_STATUS)])
-    await query.edit_message_text("Создайте **пароль** для входа (минимум 8 символов, буквы и цифры/спецсимволы):", reply_markup=reply_markup, parse_mode='Markdown')
-    return REGISTER_PASSWORD
+    await query.edit_message_text(
+        "Придумайте **юзернейм** (на английском, без пробелов, например: `ivanov21`):",
+        reply_markup=reply_markup, parse_mode='Markdown'
+    )
+    return REGISTER_USERNAME
 
+async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает и валидирует юзернейм, затем запрашивает пароль."""
+    username = update.message.text
+    # Простая проверка на английские буквы, цифры и _
+    if not re.match(r"^[a-zA-Z0-9_]{3,}$", username):
+        await update.message.reply_text(
+            "❌ Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'. Попробуйте снова."
+        )
+        return REGISTER_USERNAME
+
+    context.user_data['registration']['username'] = username
+    reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_USERNAME)])
+    await update.message.reply_text("Создайте **пароль** для входа (минимум 8 символов):", reply_markup=reply_markup, parse_mode='Markdown')
+    return REGISTER_PASSWORD
 
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получает пароль и завершает регистрацию."""
