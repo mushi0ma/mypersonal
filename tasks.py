@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
+# tasks.py
 import os
 from celery import Celery
 from celery.schedules import crontab
 from dotenv import load_dotenv
 import telegram
+import db_data # <-- Импортируем наш модуль для работы с БД
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -15,48 +16,58 @@ celery_app = Celery(
     backend=os.getenv("CELERY_RESULT_BACKEND")
 )
 
-# --- ИНИЦИАЛИЗАЦИЯ API НОВОГО БОТА-УВЕДОМИТЕЛЯ ---
+# --- Инициализация API бота-уведомителя ---
 try:
-    # Используем новый токен из .env
     notifier_bot = telegram.Bot(token=os.getenv("NOTIFICATION_BOT_TOKEN"))
     print("✅ Notifier Bot API initialized for Celery.")
 except Exception as e:
     print(f"❌ Failed to initialize Notifier Bot API for Celery: {e}")
-    # Если токен не найден, бот будет None, и отправка не будет работать
     notifier_bot = None
 
-# --- Описание задач ---
-
+# --- НОВАЯ УМНАЯ ЗАДАЧА ---
 @celery_app.task
-def send_telegram_message(chat_id: int, text: str, parse_mode: str = None):
-    """Задача для отправки сообщения через бота-уведомителя."""
+def create_and_send_notification(user_id: int, text: str, category: str):
+    """
+    Главная задача: сохраняет уведомление в БД и отправляет его пользователю.
+    """
     if not notifier_bot:
-        print(f"❌ Notifier bot is not available. Cannot send message to {chat_id}")
+        print(f"❌ Notifier bot is not available. Cannot process notification for user {user_id}")
         return
 
     try:
-        # Теперь сообщения отправляет notifier_bot
-        notifier_bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
-        print(f"✅ Message successfully sent to user {chat_id} via Notifier Bot.")
-    except telegram.error.TelegramError as e:
-        print(f"❌ Error sending message to user {chat_id} via Notifier Bot: {e}")
+        # 1. Сохраняем уведомление в базу данных
+        db_data.create_notification(user_id=user_id, text=text, category=category)
+        
+        # 2. Получаем telegram_id для отправки
+        telegram_id = db_data.get_telegram_id_by_user_id(user_id)
+        
+        # 3. Отправляем сообщение
+        notifier_bot.send_message(chat_id=telegram_id, text=text, parse_mode='Markdown')
+        print(f"✅ Notification for user {user_id} saved and sent to {telegram_id}.")
 
-# Пример периодической задачи для рассылки уведомлений (остается без изменений)
+    except db_data.NotFoundError as e:
+        print(f"❌ Error processing notification for user {user_id}: {e}")
+    except telegram.error.TelegramError as e:
+        print(f"❌ Error sending notification to user {user_id} (telegram_id: {telegram_id}): {e}")
+    except Exception as e:
+        print(f"❌ An unexpected error occurred in create_and_send_notification: {e}")
+
+
+# ... (остальные задачи, такие как check_due_dates_and_notify, остаются без изменений) ...
 @celery_app.task
 def check_due_dates_and_notify():
     """Проверяет сроки сдачи книг и уведомляет должников."""
     print("Выполняется периодическая задача: проверка сроков сдачи книг...")
-    # Здесь должна быть логика получения должников из db_data
-    # overdue_users = db_data.get_users_with_overdue_books()
-    # for user in overdue_users:
-    #     text = f"Уважаемый {user['full_name']}, напоминаем, что вам нужно вернуть книгу '{user['book_name']}'."
-    #     send_telegram_message.delay(user['telegram_id'], text)
-
+    # В будущем здесь будет логика, которая будет вызывать create_and_send_notification
+    # users = db_data.get_users_with_overdue_books()
+    # for user in users:
+    #     text = "Напоминание о сроке сдачи книги!"
+    #     create_and_send_notification.delay(user['id'], text, 'due_date')
 
 # --- Расписание для периодических задач (Celery Beat) ---
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
         'task': 'tasks.check_due_dates_and_notify',
-        'schedule': crontab(hour=10, minute=0), # Каждый день в 10:00
+        'schedule': crontab(hour=10, minute=0),
     },
 }

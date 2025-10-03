@@ -87,7 +87,7 @@ def send_whatsapp_code(contact: str, code: str):
 async def send_local_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> bool:
     try:
         message_body = f"Ваш код для библиотеки: {code}"
-        send_telegram_message.delay(telegram_id, message_body)
+        create_and_send_notification.delay(telegram_id, message_body)
         context.user_data['verification_method'] = 'telegram_notifier'
         return True
     except Exception as e:
@@ -598,7 +598,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
             if reservations:
                 user_to_notify_id = reservations[0]
                 notification_text = f"🎉 Книга '{book_name}', которую вы резервировали, снова в наличии."
-                send_telegram_message.delay(user_to_notify_id, notification_text)
+                create_and_send_notification.delay(user_to_notify_id, notification_text)
                 db_data.update_reservation_status(user_to_notify_id, book_id, notified=True)
             return USER_RATE_PROMPT_AFTER_RETURN
         else:

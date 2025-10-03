@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 # db_data.py - REVISED FOR CONNECTION POOLING AND EXCEPTION HANDLING
+import logging
 from db_utils import get_db_connection, hash_password
 from datetime import datetime
 import psycopg2
+
+logger = logging.getLogger(__name__)
 
 # --- Custom Exceptions ---
 class DatabaseError(Exception):
@@ -800,3 +803,48 @@ def delete_user_by_self(user_id: int):
             except psycopg2.Error as e:
                 conn.rollback()
                 raise DatabaseError(f"Не удалось удалить пользователя: {e}")
+
+def create_notification(user_id: int, text: str, category: str):
+    """Сохраняет новое уведомление для пользователя в базу данных."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO notifications (user_id, text, category)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (user_id, text, category)
+                )
+                conn.commit()
+            except psycopg2.Error as e:
+                conn.rollback()
+                # В данном случае просто логируем ошибку, чтобы не прерывать основной процесс
+                logger.error(f"Не удалось создать уведомление для user_id {user_id}: {e}")
+
+def log_activity(user_id: int, action: str, details: str = None):
+    """Записывает действие пользователя в журнал активности."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO activity_log (user_id, action, details)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (user_id, action, details)
+                )
+                conn.commit()
+            except psycopg2.Error as e:
+                conn.rollback()
+                logger.error(f"Не удалось записать действие '{action}' для user_id {user_id}: {e}")
+
+def get_telegram_id_by_user_id(user_id: int):
+    """Возвращает telegram_id пользователя по его внутреннему id."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT telegram_id FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0]
+            raise NotFoundError(f"Telegram ID для пользователя {user_id} не найден.")
