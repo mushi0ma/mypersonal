@@ -58,12 +58,12 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     LOGIN_CONTACT, LOGIN_PASSWORD,
     FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE, FORGOT_PASSWORD_SET_NEW,
     # Новые состояния для пользовательского меню
-    USER_MENU, USER_BORROW_BOOK_NAME, USER_RETURN_BOOK, USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING,
+    USER_MENU, USER_BORROW_BOOK_NAME, USER_BORROW_BOOK_SELECT, USER_RETURN_BOOK, USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING,
     # Новое состояние для резервации
     USER_RESERVE_BOOK_CONFIRM,
     # Новое состояние для истории
     USER_VIEW_HISTORY
-) = range(20)
+) = range(21)
 
 
 # --------------------------
@@ -310,7 +310,7 @@ async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     # Простая проверка на английские буквы, цифры и _
     if not re.match(r"^[a-zA-Z0-9_]{3,}$", username):
         await update.message.reply_text(
-            "❌ Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'. Попробуйте снова."
+            "Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'. Попробуйте снова."
         )
         return REGISTER_USERNAME
 
@@ -466,7 +466,7 @@ async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     new_password = update.message.text
 
     if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", new_password):
-        await update.message.reply_text("❌ Новый пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол.")
+        await update.message.reply_text("Новый пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол.")
         return FORGOT_PASSWORD_SET_NEW
 
     login_query = context.user_data['forgot_password_contact']
@@ -476,7 +476,7 @@ async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти, используя /start.")
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля через db_data: {e}")
-        await update.message.reply_text(f"❌ Ошибка при обновлении пароля. Нажмите 'Назад', чтобы попробовать ввести его снова.")
+        await update.message.reply_text(f"Ошибка при обновлении пароля. Нажмите 'Назад', чтобы попробовать ввести его снова.")
         return FORGOT_PASSWORD_SET_NEW
 
     context.user_data.clear()
@@ -559,42 +559,73 @@ async def start_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return USER_BORROW_BOOK_NAME
 
 async def process_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает запрос на взятие книги и предлагает резервацию, если ее нет в наличии."""
-    book_name = update.message.text
+    """Ищет книги по запросу и показывает список для выбора."""
+    book_query = update.message.text
+    
+    try:
+        found_books = db_data.get_book_by_name(book_query)
+        
+        message_text = "Вот что удалось найти по вашему запросу. Выберите книгу, чтобы взять ее:"
+        keyboard = []
+        for book in found_books:
+            button_text = f"{book['name']} ({book['author_name']}) - доступно: {book['available_quantity']}"
+            callback_data = f"borrow_book_{book['id']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(message_text, reply_markup=reply_markup)
+        
+        return USER_BORROW_BOOK_SELECT
+
+    except db_data.NotFoundError as e:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(f"{e} Попробуйте еще раз или вернитесь в меню.", reply_markup=reply_markup)
+        return USER_BORROW_BOOK_NAME
+
+async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает выбор книги, проверяет доступность и предлагает резерв."""
+    query = update.callback_query
+    await query.answer()
+
+    book_id = int(query.data.split('_')[2])
     user_id = context.user_data['current_user']['id']
 
     try:
-        found_book = db_data.get_book_by_name(book_name)
+        selected_book = db_data.get_book_by_id(book_id)
+
+        if selected_book['available_quantity'] > 0:
+            borrowed_books = db_data.get_borrowed_books(user_id)
+            borrow_limit = get_user_borrow_limit(context.user_data['current_user']['status'])
+            if len(borrowed_books) >= borrow_limit:
+                await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на количество заимствованных книг.")
+                return await user_menu(update, context)
+
+            db_data.borrow_book(user_id, selected_book['id'])
+            await query.edit_message_text(f"✅ Книга '{selected_book['name']}' успешно взята.")
+            return await user_menu(update, context)
+        
+        else:
+            context.user_data['book_to_reserve'] = selected_book
+            keyboard = [
+                [InlineKeyboardButton("Да, уведомить меня", callback_data="reserve_yes")],
+                [InlineKeyboardButton("Нет, спасибо", callback_data="reserve_no")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                f"Книга '{selected_book['name']}' временно отсутствует. Хотите зарезервировать ее и получить уведомление о поступлении?",
+                reply_markup=reply_markup
+            )
+            return USER_RESERVE_BOOK_CONFIRM
+
     except db_data.NotFoundError:
-        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            f"Книга '{book_name}' не найдена. Попробуйте еще раз или вернитесь в меню.",
-            reply_markup=reply_markup
-        )
-        return USER_BORROW_BOOK_NAME
-
-    if found_book['available_quantity'] <= 0:
-        context.user_data['book_to_reserve'] = found_book
-        keyboard = [
-            [InlineKeyboardButton("Да, уведомить меня", callback_data="reserve_yes")],
-            [InlineKeyboardButton("Нет, спасибо", callback_data="reserve_no")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            f"Книга '{found_book['name']}' временно отсутствует. Хотите зарезервировать ее и получить уведомление о поступлении?",
-            reply_markup=reply_markup
-        )
-        return USER_RESERVE_BOOK_CONFIRM
-
-    try:
-        db_data.borrow_book(user_id, found_book['id'])
-        await update.message.reply_text(f"✅ Книга '{found_book['name']}' успешно взята.")
+        await query.edit_message_text("❌ Ошибка: выбранная книга не найдена в базе. Возможно, она была удалена.")
+        return await user_menu(update, context)
     except Exception as e:
-        await update.message.reply_text(f"❌ Не удалось взять книгу: {e}")
-
-    return await user_menu(update, context)
-
+        await query.edit_message_text(f"❌ Произошла непредвиденная ошибка: {e}")
+        return await user_menu(update, context)
 
 async def process_reservation_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обрабатывает решение пользователя о резервировании книги."""

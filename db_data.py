@@ -136,24 +136,42 @@ def get_borrowed_books(user_id: int):
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 def get_book_by_name(query: str):
-    """Ищет книгу по частичному совпадению в названии ИЛИ имени автора."""
+    """Ищет книги по частичному совпадению в названии ИЛИ имени автора."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            # Новый SQL-запрос, который объединяет таблицы books и authors
             sql_query = """
-                SELECT b.id, b.name, b.available_quantity
+                SELECT b.id, b.name, a.name as author_name, b.available_quantity
                 FROM books b
                 JOIN authors a ON b.author_id = a.id
                 WHERE b.name ILIKE %s OR a.name ILIKE %s
-                LIMIT 1
+                LIMIT 10
             """
             search_pattern = f"%{query}%"
-            # Передаем шаблон поиска для обоих полей (название книги и имя автора)
             cur.execute(sql_query, (search_pattern, search_pattern))
             
+            rows = cur.fetchall()
+            if not rows:
+                raise NotFoundError("По вашему запросу ничего не найдено.")
+            
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+
+def get_book_by_id(book_id: int):
+    """Ищет одну книгу по её уникальному ID."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT b.id, b.name, a.name as author_name, b.available_quantity
+                FROM books b
+                JOIN authors a ON b.author_id = a.id
+                WHERE b.id = %s
+                """,
+                (book_id,)
+            )
             row = cur.fetchone()
             if not row:
-                raise NotFoundError("Книга или автор не найдены.")
+                raise NotFoundError("Книга с таким ID не найдена.")
             
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
