@@ -391,3 +391,38 @@ def get_user_ratings(user_id: int):
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
+        
+def delete_user_by_self(user_id: int):
+    """
+    Анонимизирует пользователя по его собственной просьбе.
+    Сначала проверяет, есть ли у него книги на руках.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                # 1. Проверяем, есть ли у пользователя невозвращенные книги
+                cur.execute(
+                    "SELECT 1 FROM borrowed_books WHERE user_id = %s AND return_date IS NULL",
+                    (user_id,)
+                )
+                if cur.fetchone():
+                    # Если есть хотя бы одна запись, возвращаем ошибку
+                    return "У вас есть невозвращенные книги. Удаление невозможно."
+
+                # 2. Если книг нет, анонимизируем пользователя
+                anonymized_username = f"deleted_user_{user_id}"
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET username = %s, full_name = '(удален)', contact_info = %s,
+                        password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL
+                    WHERE id = %s
+                    """,
+                    (anonymized_username, anonymized_username, user_id)
+                )
+
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось удалить пользователя: {e}")

@@ -58,12 +58,14 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     LOGIN_CONTACT, LOGIN_PASSWORD,
     FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE, FORGOT_PASSWORD_SET_NEW,
     # Новые состояния для пользовательского меню
-    USER_MENU, USER_BORROW_BOOK_NAME, USER_BORROW_BOOK_SELECT, USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN, USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING,
+    USER_MENU, USER_BORROW_BOOK_NAME, USER_BORROW_BOOK_SELECT,
+    USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN,
+    USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING, USER_DELETE_CONFIRM,
     # Новое состояние для резервации
     USER_RESERVE_BOOK_CONFIRM,
     # Новое состояние для истории
     USER_VIEW_HISTORY
-) = range(22)
+) = range(23)
 
 
 # --------------------------
@@ -764,6 +766,7 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     keyboard = [
         [InlineKeyboardButton("📜 Перейти к истории", callback_data="user_history")],
+        [InlineKeyboardButton("🗑️ Удалить аккаунт", callback_data="user_delete_account")],
         [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -922,6 +925,52 @@ async def initiate_rating_from_return(update: Update, context: ContextTypes.DEFA
     # Вызываем уже существующую функцию, которая рисует звезды
     return await select_rating(update, context)
 
+async def ask_delete_self_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Запрашивает подтверждение на удаление аккаунта."""
+    query = update.callback_query
+    await query.answer()
+    user_id = context.user_data['current_user']['id']
+
+    borrowed_books = db_data.get_borrowed_books(user_id)
+    if borrowed_books:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в профиль", callback_data="user_profile")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "Вы не можете удалить аккаунт, пока у вас на руках есть книги. "
+            "Пожалуйста, верните все книги и попробуйте снова.",
+            reply_markup=reply_markup
+        )
+        return USER_MENU # Возвращаемся в общее меню профиля
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, я уверен", callback_data="user_confirm_self_delete")],
+        [InlineKeyboardButton("❌ Нет, отмена", callback_data="user_profile")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        "Вы уверены, что хотите удалить свой аккаунт?\n\n"
+        "Это действие невозможно отменить. Ваша история будет анонимизирована.",
+        reply_markup=reply_markup
+    )
+    return USER_DELETE_CONFIRM
+
+async def process_delete_self_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает подтверждение и удаляет аккаунт пользователя."""
+    query = update.callback_query
+    await query.answer()
+    user_id = context.user_data['current_user']['id']
+
+    result = db_data.delete_user_by_self(user_id)
+
+    if result == "Успешно":
+        await query.edit_message_text("Ваш аккаунт был успешно удален. Прощайте!")
+        context.user_data.clear()
+        return ConversationHandler.END # Завершаем сессию
+    else:
+        # На случай, если результат изменился между проверкой и удалением
+        await query.edit_message_text(f"Не удалось удалить аккаунт: {result}")
+        return await user_menu(update, context)
+
 def main() -> None:
     """Инициализирует БД и запускает бота."""
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -1023,7 +1072,10 @@ def main() -> None:
                 CallbackQueryHandler(process_rating, pattern="^rating_\d+$"),
                 CallbackQueryHandler(start_rate_book, pattern="^user_rate$")
             ],
-
+            USER_DELETE_CONFIRM: [
+                CallbackQueryHandler(process_delete_self_confirmation, pattern="^user_confirm_self_delete$"),
+                CallbackQueryHandler(view_profile, pattern="^user_profile$"),
+            ],
             # --- Восстановление пароля ---
             FORGOT_PASSWORD_CONTACT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_forgot_password_contact),
