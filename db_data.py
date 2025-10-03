@@ -367,3 +367,21 @@ def delete_user_by_admin(user_id: int):
             except psycopg2.Error as e:
                 conn.rollback()
                 raise DatabaseError(f"Не удалось удалить пользователя: {e}")
+            
+def get_user_ratings(user_id: int):
+    """Возвращает историю оценок пользователя (книга и оценка)."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT b.name as book_name, r.rating
+                FROM ratings r
+                JOIN books b ON r.book_id = b.id
+                WHERE r.user_id = %s
+                ORDER BY b.name
+                """,
+                (user_id,)
+            )
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]

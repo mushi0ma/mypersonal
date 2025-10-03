@@ -125,13 +125,13 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Сохраняем текущую страницу, чтобы кнопка "Назад" работала
     current_page = context.user_data.get('current_stats_page', 0)
     user_id = int(query.data.split('_')[3])
     
     try:
         user = db_data.get_user_by_id(user_id)
-        history = db_data.get_user_borrow_history(user_id)
+        borrow_history = db_data.get_user_borrow_history(user_id)
+        rating_history = db_data.get_user_ratings(user_id) # <<-- ПОЛУЧАЕМ ИСТОРИЮ ОЦЕНОК
 
         reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
         age = calculate_age(user['dob'])
@@ -146,17 +146,26 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "**История взятых книг:**"
         ]
 
-        if history:
-            for item in history:
+        if borrow_history:
+            for item in borrow_history:
                 return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "не возвращена"
                 borrow_date_str = item['borrow_date'].strftime('%d.%m.%Y')
                 message_parts.append(f" - `{item['book_name']}` (взята: {borrow_date_str}, возвращена: {return_date_str})")
         else:
             message_parts.append("Пользователь еще не брал ни одной книги.")
             
+        # --- ДОБАВЛЕН НОВЫЙ БЛОК ДЛЯ ОТОБРАЖЕНИЯ ОЦЕНОК ---
+        message_parts.append("\n**История оценок:**")
+        if rating_history:
+            for item in rating_history:
+                stars = "⭐" * item['rating'] # Превращаем число в звезды
+                message_parts.append(f" - `{item['book_name']}`: {stars}")
+        else:
+            message_parts.append("Пользователь еще не поставил ни одной оценки.")
+        # --- КОНЕЦ НОВОГО БЛОКА ---
+            
         message_text = "\n".join(message_parts)
 
-        # Кнопки действий
         keyboard = [
             [InlineKeyboardButton("🗑️ Удалить пользователя", callback_data=f"admin_delete_user_{user_id}")],
             [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"stats_page_{current_page}")]
