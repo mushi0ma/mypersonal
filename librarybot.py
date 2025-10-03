@@ -750,7 +750,7 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     message_parts = [
         "**📚 Ваш Личный Кабинет 📚**",
         f"ФИО: {user_profile['full_name']}",
-        f"Имя пользователя: @{user_profile['telegram_username']}" if user_profile['telegram_username'] else "Имя пользователя: Н/Д",
+        f"Имя пользователя: {user_profile['username']}",
         f"Статус: {user_profile['status'].capitalize()}",
         f"Контакт: {user_profile['contact_info']}",
         f"Лимит книг: {borrow_limit}",

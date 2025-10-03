@@ -221,7 +221,7 @@ def get_user_profile(user_id: int):
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT full_name, telegram_username, status, contact_info, registration_date FROM users WHERE id = %s",
+                "SELECT username, full_name, telegram_username, status, contact_info, registration_date FROM users WHERE id = %s",
                 (user_id,)
             )
             row = cur.fetchone()
