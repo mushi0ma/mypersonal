@@ -788,40 +788,54 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
         return await user_menu(update, context)
 
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Показывает профиль и список взятых книг."""
+    """Показывает стилизованный профиль и список взятых книг."""
     query = update.callback_query
     await query.answer()
 
     user_id = context.user_data['current_user']['id']
-    user_profile = db_data.get_user_profile(user_id)
-    borrowed_books = db_data.get_borrowed_books(user_id)
-    borrow_limit = get_user_borrow_limit(user_profile['status'])
+    try:
+        user_profile = db_data.get_user_profile(user_id)
+        borrowed_books = db_data.get_borrowed_books(user_id)
+        borrow_limit = get_user_borrow_limit(user_profile['status'])
 
-    message_parts = [
-        "**📚 Ваш Личный Кабинет 📚**",
-        f"ФИО: {user_profile['full_name']}",
-        f"Имя пользователя: {user_profile['username']}",
-        f"Статус: {user_profile['status'].capitalize()}",
-        f"Контакт: {user_profile['contact_info']}",
-        f"Лимит книг: {borrow_limit}",
-        f"Дата регистрации: {user_profile['registration_date'].strftime('%Y-%m-%d')}\n",
-        f"**Взятые книги ({len(borrowed_books)}):**"
-    ]
+        reg_date_str = user_profile['registration_date'].strftime('%d.%m.%Y')
 
-    if borrowed_books:
-        for borrowed in borrowed_books:
-            message_parts.append(f"- {borrowed['book_name']} (автор: {borrowed['author_name']})")
-    else:
-        message_parts.append("У вас нет взятых книг.")
+        # --- НОВЫЙ БЛОК ФОРМАТИРОВАНИЯ ---
+        message_parts = [
+            f"👤 **Личный кабинет** 👤",
+            f"`-------------------------`",
+            f"*Пользователь:*",
+            f"  • **Имя:** `{user_profile['full_name']}`",
+            f"  • **Юзернейм:** `{user_profile['username']}`",
+            f"  • **Статус:** `{user_profile['status'].capitalize()}`",
+            f"\n*Аккаунт:*",
+            f"  • **Контакт:** `{user_profile['contact_info']}`",
+            f"  • **В библиотеке с:** `{reg_date_str}`",
+            f"`-------------------------`",
+            f"📚 **Взятые книги ({len(borrowed_books)}/{borrow_limit})**"
+        ]
 
-    keyboard = [
-        [InlineKeyboardButton("📜 Перейти к истории", callback_data="user_history")],
-        [InlineKeyboardButton("🗑️ Удалить аккаунт", callback_data="user_delete_account")],
-        [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+        if borrowed_books:
+            for i, borrowed in enumerate(borrowed_books):
+                message_parts.append(f"  {i+1}. `{borrowed['book_name']}` (автор: {borrowed['author_name']})")
+        else:
+            message_parts.append("  _У вас нет активных займов._")
+        # --- КОНЕЦ НОВОГО БЛОКА ---
 
-    await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
+        keyboard = [
+            [InlineKeyboardButton("📜 Перейти к истории", callback_data="user_history")],
+            [InlineKeyboardButton("🗑️ Удалить аккаунт", callback_data="user_delete_account")],
+            [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
+    
+    except db_data.NotFoundError:
+        await query.edit_message_text("Не удалось найти ваш профиль. Пожалуйста, войдите снова.")
+        context.user_data.clear()
+        return await start(update, context)
+
     return USER_MENU
 
 async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
