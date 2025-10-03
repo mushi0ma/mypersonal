@@ -24,6 +24,7 @@ def initialize_database():
         """
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
+            username VARCHAR(50) UNIQUE NOT NULL, -- <<-- ДОБАВЛЕНО
             telegram_id BIGINT UNIQUE,
             telegram_username VARCHAR(255) UNIQUE,
             full_name VARCHAR(255) NOT NULL,
