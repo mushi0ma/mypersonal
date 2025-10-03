@@ -1,7 +1,7 @@
 # init_db.py
 import os
 import psycopg2
-from db_setup import get_db_connection
+from db_utils import get_db_connection
 
 def initialize_database():
     """Создает все необходимые таблицы, если они не существуют."""

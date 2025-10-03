@@ -18,7 +18,7 @@ from telegram.ext import (
 
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import db_data
-from db_setup import hash_password
+from db_utils import hash_password
 from tasks import send_telegram_message
 
 # --- ИМПОРТ СЕРВИСОВ И PYWHATKIT ---
@@ -384,7 +384,6 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except db_data.NotFoundError:
         await update.message.reply_text("Пользователь не найден. Попробуйте еще раз или /start для регистрации.")
         return LOGIN_CONTACT
-
 
 async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Проверяет пароль пользователя."""

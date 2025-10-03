@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # db_data.py - REVISED FOR CONNECTION POOLING AND EXCEPTION HANDLING
-from db_setup import get_db_connection, hash_password
+from db_utils import get_db_connection, hash_password
 from datetime import datetime
 import psycopg2
 
