@@ -953,6 +953,10 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_borrow_book),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
+            USER_BORROW_BOOK_SELECT: [
+                CallbackQueryHandler(process_borrow_selection, pattern="^borrow_book_"),
+                CallbackQueryHandler(user_menu, pattern="^user_menu$")
+            ],
             USER_RESERVE_BOOK_CONFIRM: [
                 CallbackQueryHandler(process_reservation_decision, pattern="^reserve_(yes|no)$")
             ],
