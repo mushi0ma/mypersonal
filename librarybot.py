@@ -19,7 +19,7 @@ from telegram.ext import (
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import db_data
 from db_utils import hash_password
-from tasks import send_telegram_message
+from tasks import create_and_send_notification
 
 # --- ИМПОРТ СЕРВИСОВ ---
 from twilio.rest import Client
