@@ -58,7 +58,8 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     REGISTER_VERIFY_CODE, REGISTER_STATUS,
     REGISTER_USERNAME, REGISTER_PASSWORD, REGISTER_CONFIRM_PASSWORD,
     LOGIN_CONTACT, LOGIN_PASSWORD,
-    FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE, FORGOT_PASSWORD_SET_NEW,
+    FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE,
+    FORGOT_PASSWORD_SET_NEW, FORGOT_PASSWORD_CONFIRM_NEW,
     # Новые состояния для пользовательского меню
     USER_MENU, USER_BORROW_BOOK_NAME, USER_BORROW_BOOK_SELECT,
     USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN,
@@ -67,7 +68,7 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     USER_RESERVE_BOOK_CONFIRM,
     # Новое состояние для истории
     USER_VIEW_HISTORY
-) = range(24)
+) = range(25)
 
 
 # --------------------------
@@ -489,22 +490,46 @@ async def verify_forgot_password_code(update: Update, context: ContextTypes.DEFA
         return FORGOT_PASSWORD_VERIFY_CODE
 
 async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обновляет пароль в БД (Шаг 3)."""
+    """Получает и проверяет ПЕРВЫЙ ввод нового пароля."""
     new_password = update.message.text
+    
+    # Удаляем сообщение с паролем
+    await update.message.delete()
 
     if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", new_password):
-        await update.message.reply_text("Новый пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол.")
+        await update.message.reply_text("❌ Новый пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол.")
         return FORGOT_PASSWORD_SET_NEW
 
-    login_query = context.user_data['forgot_password_contact']
+    # Сохраняем первый пароль в памяти
+    context.user_data['forgot_password_temp'] = new_password
+    
+    await update.message.reply_text("Пожалуйста, **введите новый пароль еще раз** для подтверждения:", parse_mode='Markdown')
+    
+    return FORGOT_PASSWORD_CONFIRM_NEW
 
+async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает ВТОРОЙ пароль, сравнивает и обновляет в БД."""
+    password_confirm = update.message.text
+    
+    # Удаляем сообщение с паролем
+    await update.message.delete()
+
+    if context.user_data.get('forgot_password_temp') != password_confirm:
+        await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, введите новый пароль заново.")
+        # Возвращаем на шаг ввода первого пароля
+        return FORGOT_PASSWORD_SET_NEW
+
+    # Пароли совпали, обновляем в базе данных
+    login_query = context.user_data['forgot_password_contact']
+    final_password = context.user_data.pop('forgot_password_temp')
+    
     try:
-        db_data.update_user_password(login_query, new_password)
+        db_data.update_user_password(login_query, final_password)
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти, используя /start.")
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля через db_data: {e}")
-        await update.message.reply_text(f"Ошибка при обновлении пароля. Нажмите 'Назад', чтобы попробовать ввести его снова.")
-        return FORGOT_PASSWORD_SET_NEW
+        await update.message.reply_text(f"❌ Ошибка при обновлении пароля. Попробуйте снова.")
+        return FORGOT_PASSWORD_SET_NEW # Возвращаемся, чтобы попробовать еще раз
 
     context.user_data.clear()
     return await start(update, context)
@@ -1121,6 +1146,9 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, set_new_password),
                 # Назад: к вводу VERIFY_CODE
                 CallbackQueryHandler(get_forgot_password_contact, pattern="^back_FORGOT_PASSWORD_VERIFY_CODE$")
+            ],
+            FORGOT_PASSWORD_CONFIRM_NEW: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_new_password),
             ],
         },
         # Убрана команда /cancel из fallbacks для полной кнопочной навигации
