@@ -714,7 +714,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=reply_markup
             )
 
-            # Проверяем резервации и уведомляем (эта логика остается)
+            # Проверяем резервации и уведомляем
             reservations = db_data.get_reservations_for_book(book_id)
             if reservations:
                 user_to_notify_id = reservations[0]
