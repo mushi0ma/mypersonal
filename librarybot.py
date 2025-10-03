@@ -58,12 +58,12 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     LOGIN_CONTACT, LOGIN_PASSWORD,
     FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE, FORGOT_PASSWORD_SET_NEW,
     # Новые состояния для пользовательского меню
-    USER_MENU, USER_BORROW_BOOK_NAME, USER_BORROW_BOOK_SELECT, USER_RETURN_BOOK, USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING,
+    USER_MENU, USER_BORROW_BOOK_NAME, USER_BORROW_BOOK_SELECT, USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN, USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING,
     # Новое состояние для резервации
     USER_RESERVE_BOOK_CONFIRM,
     # Новое состояние для истории
     USER_VIEW_HISTORY
-) = range(21)
+) = range(22)
 
 
 # --------------------------
@@ -679,40 +679,61 @@ async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return USER_RETURN_BOOK
 
 async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обрабатывает возврат книги и уведомляет зарезервировавших пользователей."""
+    """Обрабатывает возврат книги, предлагает оценку и уведомляет зарезервировавших."""
     query = update.callback_query
     await query.answer()
 
     callback_data = query.data
-    borrowed_info = context.user_data['borrowed_map'].get(callback_data)
+    borrowed_info = context.user_data.get('borrowed_map', {}).get(callback_data)
+    
+    if not borrowed_info:
+        await query.edit_message_text("Ошибка: Неверный выбор книги. Пожалуйста, вернитесь в меню и попробуйте снова.")
+        return await user_menu(update, context)
+
     book_id = borrowed_info['book_id']
     book_name = borrowed_info['book_name']
 
-    if not borrowed_info:
-        await query.edit_message_text("Ошибка: Неверный выбор книги.")
-        return await user_menu(update, context)
-
     try:
-        db_data.return_book(borrowed_info['borrow_id'], book_id)
-        await query.edit_message_text(f"✅ Книга '{book_name}' успешно возвращена.")
+        # Безопасно вызываем функцию базы данных
+        result = db_data.return_book(borrowed_info['borrow_id'], book_id)
 
-        # Проверяем, есть ли резервации на эту книгу
-        reservations = db_data.get_reservations_for_book(book_id)
-        if reservations:
-            user_to_notify_id = reservations[0] # Уведомляем первого в очереди
-            notification_text = f"🎉 Хорошие новости! Книга '{book_name}', которую вы резервировали, снова в наличии. Вы можете взять ее сейчас."
+        # Если функция отработала штатно и вернула "Успешно"
+        if result == "Успешно":
+            context.user_data.pop('borrowed_map', None)
+            context.user_data['just_returned_book'] = {'id': book_id, 'name': book_name}
 
-            # Отправляем уведомление через Celery
-            send_telegram_message.delay(user_to_notify_id, notification_text)
+            # Предлагаем оценить книгу
+            keyboard = [
+                [InlineKeyboardButton("⭐ Оценить книгу", callback_data="rate_after_return")],
+                [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.edit_message_text(
+                f"✅ Книга '{book_name}' успешно возвращена. Хотите поставить ей оценку?",
+                reply_markup=reply_markup
+            )
 
-            # Обновляем статус бронирования, чтобы не уведомлять повторно
-            db_data.update_reservation_status(user_to_notify_id, book_id, notified=True)
+            # Проверяем резервации и уведомляем (эта логика остается)
+            reservations = db_data.get_reservations_for_book(book_id)
+            if reservations:
+                user_to_notify_id = reservations[0]
+                notification_text = f"🎉 Хорошие новости! Книга '{book_name}', которую вы резервировали, снова в наличии."
+                send_telegram_message.delay(user_to_notify_id, notification_text)
+                db_data.update_reservation_status(user_to_notify_id, book_id, notified=True)
+            
+            return USER_RATE_PROMPT_AFTER_RETURN
+        
+        # Если функция отработала штатно, но вернула текст ошибки
+        else:
+            await query.edit_message_text(f"❌ Не удалось вернуть книгу: {result}")
+            return await user_menu(update, context)
+
+    # Если во время работы с базой данных произошел сбой
     except Exception as e:
-        await query.edit_message_text(f"❌ Не удалось вернуть книгу: {e}")
-
-    context.user_data.pop('borrowed_map', None)
-    return await user_menu(update, context)
-
+        logger.error(f"Ошибка при возврате книги: {e}")
+        await query.edit_message_text(f"❌ Произошла непредвиденная ошибка при возврате книги.")
+        return await user_menu(update, context)
 
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Показывает профиль и список взятых книг."""
@@ -747,7 +768,6 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
     return USER_MENU
 
-
 async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Показывает историю взятых книг."""
     query = update.callback_query
@@ -771,7 +791,6 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
     return USER_MENU
-
 
 async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Выбор книги для оценки."""
@@ -877,6 +896,22 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     return await user_menu(update, context)
 
+async def initiate_rating_from_return(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Готовит данные для оценки только что возвращенной книги."""
+    query = update.callback_query
+    await query.answer()
+    
+    returned_book = context.user_data.get('just_returned_book')
+    if not returned_book:
+        await query.edit_message_text("Произошла ошибка. Информация о книге потеряна.")
+        return await user_menu(update, context)
+
+    # Мы "обманываем" контекст, чтобы повторно использовать существующую функцию
+    # Вместо callback_data="rate_X", мы вручную формируем нужные данные
+    context.user_data['book_to_rate'] = {'book_id': returned_book['id'], 'book_name': returned_book['name']}
+    
+    # Вызываем уже существующую функцию, которая рисует звезды
+    return await select_rating(update, context)
 
 def main() -> None:
     """Инициализирует БД и запускает бота."""
@@ -962,6 +997,10 @@ def main() -> None:
             ],
             USER_RETURN_BOOK: [
                 CallbackQueryHandler(process_return_book, pattern="^return_\d+$"),
+                CallbackQueryHandler(user_menu, pattern="^user_menu$")
+            ],
+            USER_RATE_PROMPT_AFTER_RETURN: [
+                CallbackQueryHandler(initiate_rating_from_return, pattern="^rate_after_return$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
             USER_RATE_BOOK_SELECT: [
