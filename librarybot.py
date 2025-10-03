@@ -62,8 +62,8 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN,
     USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING, USER_DELETE_CONFIRM,
     USER_RESERVE_BOOK_CONFIRM,
-    USER_VIEW_HISTORY
-) = range(25)
+    USER_VIEW_HISTORY, USER_NOTIFICATIONS
+) = range(26)
 
 
 # --------------------------
@@ -686,6 +686,35 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.edit_message_text(message_text)
     return await user_menu(update, context)
 
+async def show_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает последние уведомления пользователя."""
+    query = update.callback_query
+    await query.answer()
+    user_id = context.user_data['current_user']['id']
+
+    try:
+        notifications = db_data.get_notifications_for_user(user_id)
+        
+        message_parts = ["📬 **Ваши последние уведомления:**\n"]
+        for notif in notifications:
+            date_str = notif['created_at'].strftime('%d.%m.%Y %H:%M')
+            status = "⚪️" if notif['is_read'] else "🔵" # Новое/прочитанное
+            category_map = {'broadcast': 'Рассылка', 'reservation': 'Резерв', 'system': 'Система'}
+            category_str = category_map.get(notif['category'], notif['category'].capitalize())
+            
+            message_parts.append(f"`{date_str}`\n{status} **[{category_str}]** {notif['text']}\n")
+
+        message_text = "\n".join(message_parts)
+
+    except db_data.NotFoundError:
+        message_text = "📬 У вас пока нет уведомлений."
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+    return USER_MENU # Остаемся в главном меню
+
 # --- ФУНКЦИИ УДАЛЕНИЯ АККАУНТА ---
 
 async def ask_delete_self_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -755,6 +784,7 @@ def main() -> None:
                 CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
                 CallbackQueryHandler(view_profile, pattern="^user_profile$"),
                 CallbackQueryHandler(view_borrow_history, pattern="^user_history$"),
+                CallbackQueryHandler(show_notifications, pattern="^user_notifications$"),
                 CallbackQueryHandler(ask_delete_self_confirmation, pattern="^user_delete_account$"),
                 CallbackQueryHandler(logout, pattern="^logout$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),

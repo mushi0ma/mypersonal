@@ -848,3 +848,24 @@ def get_telegram_id_by_user_id(user_id: int):
             if row and row[0]:
                 return row[0]
             raise NotFoundError(f"Telegram ID для пользователя {user_id} не найден.")
+        
+def get_notifications_for_user(user_id: int, limit: int = 20):
+    """Возвращает последние уведомления для пользователя."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT text, category, created_at, is_read
+                FROM notifications
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit)
+            )
+            rows = cur.fetchall()
+            if not rows:
+                raise NotFoundError("Уведомлений не найдено.")
+            
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
