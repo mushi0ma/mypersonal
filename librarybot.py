@@ -54,7 +54,9 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
 # --- СОСТОЯНИЯ ДИАЛОГА ---
 (
     START_ROUTES,
-    REGISTER_NAME, REGISTER_DOB, REGISTER_CONTACT, REGISTER_VERIFY_CODE, REGISTER_STATUS, REGISTER_USERNAME, REGISTER_PASSWORD,
+    REGISTER_NAME, REGISTER_DOB, REGISTER_CONTACT,
+    REGISTER_VERIFY_CODE, REGISTER_STATUS,
+    REGISTER_USERNAME, REGISTER_PASSWORD, REGISTER_CONFIRM_PASSWORD,
     LOGIN_CONTACT, LOGIN_PASSWORD,
     FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE, FORGOT_PASSWORD_SET_NEW,
     # Новые состояния для пользовательского меню
@@ -65,7 +67,7 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     USER_RESERVE_BOOK_CONFIRM,
     # Новое состояние для истории
     USER_VIEW_HISTORY
-) = range(23)
+) = range(24)
 
 
 # --------------------------
@@ -322,31 +324,54 @@ async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return REGISTER_PASSWORD
 
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает пароль и завершает регистрацию."""
-    new_password = update.message.text
+    """Получает первый пароль, сохраняет его и запрашивает подтверждение."""
+    password = update.message.text
+    
+    # Сразу удаляем сообщение с паролем для безопасности
+    await update.message.delete()
 
-    if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", new_password):
+    if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", password):
         await update.message.reply_text("❌ Пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол. Попробуйте снова.")
+        # Возвращаемся на тот же шаг, чтобы пользователь ввел корректный первый пароль
         return REGISTER_PASSWORD
 
-    user_info = update.message.from_user
+    # Сохраняем первый пароль в памяти диалога
+    context.user_data['registration']['password_temp'] = password
     
-    # 1. Добавляем пароль в "корзину" с данными. Юзернейм там уже лежит с прошлого шага.
-    context.user_data['registration']['password'] = new_password
+    reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_PASSWORD)])
+    await update.message.reply_text("Отлично. Теперь **введите пароль еще раз** для подтверждения:", reply_markup=reply_markup, parse_mode='Markdown')
+    
+    return REGISTER_CONFIRM_PASSWORD
+
+async def get_password_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает второй пароль, сравнивает его с первым и завершает регистрацию."""
+    password_confirm = update.message.text
+    
+    # Сразу удаляем сообщение с паролем
+    await update.message.delete()
+
+    # Сравниваем с сохраненным паролем
+    if context.user_data['registration'].get('password_temp') != password_confirm:
+        # Если пароли не совпали, просим ввести первый пароль заново
+        await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, создайте пароль заново.")
+        # Возвращаем на шаг ввода первого пароля
+        return await get_username(update, context) # Вызываем функцию предыдущего шага, чтобы она заново задала вопрос
+
+    # Если все хорошо, сохраняем пароль и регистрируем
+    context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
+    
+    user_info = update.message.from_user
     context.user_data['registration']['telegram_id'] = user_info.id
     context.user_data['registration']['telegram_username'] = user_info.username if user_info.username else None
 
-    # 2. Передаем ВСЮ "корзину" (context.user_data['registration']) в функцию add_user.
-    #    Функция add_user в файле db_data.py теперь ожидает, что в этой "корзине" будет ключ 'username'.
     try:
-        # Мы вызываем ту же функцию, что и раньше, но теперь она должна уметь обрабатывать 'username'
         user_id = db_data.add_user(context.user_data['registration'])
         await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти, используя /start.")
     except db_data.UserExistsError:
-         await update.message.reply_text("Ошибка при регистрации. Возможно, этот юзернейм или контакт уже заняты.")
+        await update.message.reply_text("❌ Ошибка при регистрации. Возможно, этот юзернейм или контакт уже заняты.")
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}")
-        await update.message.reply_text("Произошла системная ошибка при регистрации.")
+        await update.message.reply_text("❌ Произошла системная ошибка при регистрации.")
 
     context.user_data.clear()
     return await start(update, context)
@@ -1017,6 +1042,10 @@ def main() -> None:
             REGISTER_PASSWORD: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_password),
                 CallbackQueryHandler(get_status, pattern="^back_REGISTER_USERNAME$")
+            ],
+            REGISTER_CONFIRM_PASSWORD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_password_confirmation),
+                CallbackQueryHandler(get_password, pattern="^back_REGISTER_PASSWORD$")
             ],
 
             # --- Вход ---
