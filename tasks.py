@@ -15,22 +15,33 @@ celery_app = Celery(
     backend=os.getenv("CELERY_RESULT_BACKEND")
 )
 
-# --- Инициализация Telegram Bot API ---
-bot = telegram.Bot(token=os.getenv("TELEGRAM_BOT_TOKEN"))
-print("✅ Celery: Telegram Bot API инициализирован.")
+# --- ИНИЦИАЛИЗАЦИЯ API НОВОГО БОТА-УВЕДОМИТЕЛЯ ---
+try:
+    # Используем новый токен из .env
+    notifier_bot = telegram.Bot(token=os.getenv("NOTIFICATION_BOT_TOKEN"))
+    print("✅ Notifier Bot API initialized for Celery.")
+except Exception as e:
+    print(f"❌ Failed to initialize Notifier Bot API for Celery: {e}")
+    # Если токен не найден, бот будет None, и отправка не будет работать
+    notifier_bot = None
 
 # --- Описание задач ---
 
 @celery_app.task
 def send_telegram_message(chat_id: int, text: str, parse_mode: str = None):
-    """Универсальная задача для отправки сообщения в Telegram."""
-    try:
-        bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
-        print(f"✅ Сообщение успешно отправлено пользователю {chat_id}")
-    except telegram.error.TelegramError as e:
-        print(f"❌ Ошибка отправки Telegram пользователю {chat_id}: {e}")
+    """Задача для отправки сообщения через бота-уведомителя."""
+    if not notifier_bot:
+        print(f"❌ Notifier bot is not available. Cannot send message to {chat_id}")
+        return
 
-# Пример периодической задачи для рассылки уведомлений
+    try:
+        # Теперь сообщения отправляет notifier_bot
+        notifier_bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+        print(f"✅ Message successfully sent to user {chat_id} via Notifier Bot.")
+    except telegram.error.TelegramError as e:
+        print(f"❌ Error sending message to user {chat_id} via Notifier Bot: {e}")
+
+# Пример периодической задачи для рассылки уведомлений (остается без изменений)
 @celery_app.task
 def check_due_dates_and_notify():
     """Проверяет сроки сдачи книг и уведомляет должников."""
