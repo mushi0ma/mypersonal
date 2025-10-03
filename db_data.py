@@ -263,15 +263,21 @@ def update_reservation_status(user_id, book_id, notified: bool):
                 raise DatabaseError(f"Не удалось обновить статус брони: {e}")
 
 def get_user_borrow_history(user_id: int):
-    """Получает всю историю заимствований пользователя."""
+    """Получает всю историю заимствований пользователя, включая его оценки."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT b.name as book_name, a.name as author_name, bb.borrow_date, bb.return_date
+                SELECT 
+                    b.name as book_name, 
+                    a.name as author_name, 
+                    bb.borrow_date, 
+                    bb.return_date,
+                    r.rating
                 FROM borrowed_books bb
                 JOIN books b ON bb.book_id = b.id
                 JOIN authors a ON b.author_id = a.id
+                LEFT JOIN ratings r ON bb.user_id = r.user_id AND bb.book_id = r.book_id
                 WHERE bb.user_id = %s
                 ORDER BY bb.borrow_date DESC
                 """,

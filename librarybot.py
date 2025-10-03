@@ -762,7 +762,10 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     else:
         message_parts.append("У вас нет взятых книг.")
 
-    keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
+    keyboard = [
+        [InlineKeyboardButton("📜 Перейти к истории", callback_data="user_history")],
+        [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
@@ -782,7 +785,13 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
         for item in history:
             return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "не возвращена"
             borrow_date_str = item['borrow_date'].strftime('%d.%m.%Y')
-            message_parts.append(f"- **{item['book_name']}** (взята: {borrow_date_str}, возвращена: {return_date_str})")
+            
+            rating_str = ""
+            if item['rating']:
+                stars = "⭐" * item['rating']
+                rating_str = f" (ваша оценка: {stars})"
+
+            message_parts.append(f"- **{item['book_name']}**: взята {borrow_date_str}, возвращена {return_date_str}{rating_str}")
     else:
         message_parts.append("Вы еще не брали ни одной книги.")
 
