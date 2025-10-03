@@ -1068,6 +1068,7 @@ def main() -> None:
                 CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
                 CallbackQueryHandler(view_profile, pattern="^user_profile$"),
                 CallbackQueryHandler(view_borrow_history, pattern="^user_history$"),
+                CallbackQueryHandler(ask_delete_self_confirmation, pattern="^user_delete_account$"),
                 CallbackQueryHandler(logout, pattern="^logout$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
@@ -1103,7 +1104,7 @@ def main() -> None:
             ],
             USER_DELETE_CONFIRM: [
                 CallbackQueryHandler(process_delete_self_confirmation, pattern="^user_confirm_self_delete$"),
-                CallbackQueryHandler(view_profile, pattern="^user_profile$"),
+                CallbackQueryHandler(view_profile, pattern="^user_profile$"), # Кнопка "Нет, отмена"
             ],
             # --- Восстановление пароля ---
             FORGOT_PASSWORD_CONTACT: [
