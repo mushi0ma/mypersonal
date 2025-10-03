@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # db_data.py - REVISED FOR CONNECTION POOLING AND EXCEPTION HANDLING
-from db_setup import get_db_connection, hash_password
+from db_utils import get_db_connection, hash_password
 from datetime import datetime
 import psycopg2
 
@@ -19,21 +19,21 @@ class UserExistsError(DatabaseError):
 
 
 def get_user_by_login(login_query: str):
-    """Ищет пользователя по УНИКАЛЬНОМУ полю: contact_info или telegram_username."""
+    """Ищет пользователя по УНИКАЛЬНОМУ полю: username, contact_info или telegram_username."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, full_name, contact_info, status, password_hash, telegram_id, telegram_username
-                FROM users 
-                WHERE contact_info = %s OR telegram_username = %s
+                SELECT id, full_name, contact_info, status, password_hash, telegram_id, telegram_username, username
+                FROM users
+                WHERE username = %s OR contact_info = %s OR telegram_username = %s
                 """,
-                (login_query, login_query)
+                (login_query, login_query, login_query)
             )
             row = cur.fetchone()
             if not row:
                 raise NotFoundError("Пользователь не найден.")
-            
+
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
 
@@ -45,11 +45,11 @@ def add_user(data: dict):
             try:
                 cur.execute(
                     """
-                    INSERT INTO users (telegram_id, telegram_username, full_name, dob, contact_info, status, password_hash, registration_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO users (username, telegram_id, telegram_username, full_name, dob, contact_info, status, password_hash, registration_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id;
                     """,
-                    (data.get('telegram_id'), data.get('telegram_username'), data['full_name'], data['dob'], data['contact_info'], data['status'], hashed_pass, datetime.now())
+                    (data['username'], data.get('telegram_id'), data.get('telegram_username'), data['full_name'], data['dob'], data['contact_info'], data['status'], hashed_pass, datetime.now())
                 )
                 user_id = cur.fetchone()[0]
                 conn.commit()
@@ -61,11 +61,368 @@ def add_user(data: dict):
                 conn.rollback()
                 raise DatabaseError(f"Не удалось добавить пользователя: {e}")
 
-# ... (Остальные функции `db_data.py` переписываются по тому же принципу)
-# Для краткости я опущу их здесь, но полный файл будет содержать
-# обновленные `get_user_profile`, `update_user_password`, `get_book_by_name`, `borrow_book`, `return_book`, `add_rating`
-# и новые функции для поиска, истории, бронирования и администрирования.
-# Полная версия этого файла будет очень большой, но логика везде одинакова:
-# 1. Использовать `with get_db_connection() as conn:`.
-# 2. Оборачивать логику в `try...except`.
-# 3. Пробрасывать кастомные исключения (`raise NotFoundError`, `raise DatabaseError`).
+def get_all_user_ids():
+    """Возвращает список всех telegram_id пользователей."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("SELECT telegram_id FROM users WHERE telegram_id IS NOT NULL")
+                return [item[0] for item in cur.fetchall()]
+            except psycopg2.Error as e:
+                print(f"Ошибка при получении всех ID пользователей: {e}")
+                return []
+
+def add_reservation(user_id, book_id):
+    """Добавляет запись о бронировании книги."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "INSERT INTO reservations (user_id, book_id) VALUES (%s, %s)",
+                    (user_id, book_id)
+                )
+                conn.commit()
+                return "Успешно"
+            except psycopg2.IntegrityError:
+                conn.rollback()
+                return "Вы уже зарезервировали эту книгу."
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось зарезервировать книгу: {e}")
+
+def get_reservations_for_book(book_id):
+    """Получает список пользователей, зарезервировавших книгу."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id FROM reservations WHERE book_id = %s AND notified = FALSE ORDER BY reservation_date",
+                (book_id,)
+            )
+            return [item[0] for item in cur.fetchall()]
+
+def update_user_password(login_query: str, new_password: str):
+    """Обновляет пароль пользователя."""
+    hashed_pass = hash_password(new_password)
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "UPDATE users SET password_hash = %s WHERE contact_info = %s OR telegram_username = %s",
+                    (hashed_pass, login_query, login_query)
+                )
+                if cur.rowcount == 0:
+                    raise NotFoundError("Пользователь для обновления пароля не найден.")
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось обновить пароль: {e}")
+
+def get_borrowed_books(user_id: int):
+    """Получает список книг, взятых пользователем."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT bb.borrow_id, b.id as book_id, b.name as book_name, a.name as author_name, bb.borrow_date
+                FROM borrowed_books bb
+                JOIN books b ON bb.book_id = b.id
+                JOIN authors a ON b.author_id = a.id
+                WHERE bb.user_id = %s AND bb.return_date IS NULL
+                """,
+                (user_id,)
+            )
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+def get_book_by_name(query: str):
+    """Ищет книги по частичному совпадению в названии ИЛИ имени автора."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            sql_query = """
+                SELECT b.id, b.name, a.name as author_name, b.available_quantity
+                FROM books b
+                JOIN authors a ON b.author_id = a.id
+                WHERE b.name ILIKE %s OR a.name ILIKE %s
+                LIMIT 10
+            """
+            search_pattern = f"%{query}%"
+            cur.execute(sql_query, (search_pattern, search_pattern))
+            
+            rows = cur.fetchall()
+            if not rows:
+                raise NotFoundError("По вашему запросу ничего не найдено.")
+            
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+
+def get_book_by_id(book_id: int):
+    """Ищет одну книгу по её уникальному ID."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT b.id, b.name, a.name as author_name, b.available_quantity
+                FROM books b
+                JOIN authors a ON b.author_id = a.id
+                WHERE b.id = %s
+                """,
+                (book_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                raise NotFoundError("Книга с таким ID не найдена.")
+            
+            columns = [desc[0] for desc in cur.description]
+            return dict(zip(columns, row))
+
+def borrow_book(user_id: int, book_id: int):
+    """Обрабатывает взятие книги: создает запись о займе и уменьшает количество доступных книг."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "UPDATE books SET available_quantity = available_quantity - 1 WHERE id = %s AND available_quantity > 0",
+                    (book_id,)
+                )
+                if cur.rowcount == 0:
+                    return "Книга закончилась."
+                cur.execute(
+                    "INSERT INTO borrowed_books (user_id, book_id, due_date) VALUES (%s, %s, CURRENT_DATE + INTERVAL '14 day')",
+                    (user_id, book_id)
+                )
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось взять книгу: {e}")
+
+def return_book(borrow_id: int, book_id: int):
+    """Обрабатывает возврат книги: обновляет запись о займе и увеличивает количество доступных книг."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE borrow_id = %s",
+                    (borrow_id,)
+                )
+                cur.execute(
+                    "UPDATE books SET available_quantity = available_quantity + 1 WHERE id = %s",
+                    (book_id,)
+                )
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось вернуть книгу: {e}")
+
+def get_user_profile(user_id: int):
+    """Получает полные данные профиля пользователя."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT username, full_name, telegram_username, status, contact_info, registration_date FROM users WHERE id = %s",
+                (user_id,)
+            )
+            row = cur.fetchone()
+            if not row:
+                raise NotFoundError("Профиль пользователя не найден.")
+            columns = [desc[0] for desc in cur.description]
+            return dict(zip(columns, row))
+
+def add_rating(user_id: int, book_id: int, rating: int):
+    """Добавляет или обновляет оценку книги."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO ratings (user_id, book_id, rating) VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id, book_id) DO UPDATE SET rating = EXCLUDED.rating;
+                    """,
+                    (user_id, book_id, rating)
+                )
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось добавить оценку: {e}")
+
+def update_reservation_status(user_id, book_id, notified: bool):
+    """Обновляет статус уведомления для брони."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    "UPDATE reservations SET notified = %s WHERE user_id = %s AND book_id = %s AND notified = FALSE",
+                    (notified, user_id, book_id)
+                )
+                conn.commit()
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось обновить статус брони: {e}")
+
+def get_user_borrow_history(user_id: int):
+    """Получает всю историю заимствований пользователя, включая его оценки."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 
+                    b.name as book_name, 
+                    a.name as author_name, 
+                    bb.borrow_date, 
+                    bb.return_date,
+                    r.rating
+                FROM borrowed_books bb
+                JOIN books b ON bb.book_id = b.id
+                JOIN authors a ON b.author_id = a.id
+                LEFT JOIN ratings r ON bb.user_id = r.user_id AND bb.book_id = r.book_id
+                WHERE bb.user_id = %s
+                ORDER BY bb.borrow_date DESC
+                """,
+                (user_id,)
+            )
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+def get_all_users(limit: int, offset: int):
+    """Возвращает порцию пользователей для постраничной навигации и общее количество."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Получаем общее количество пользователей
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()[0]
+
+            # Получаем срез пользователей с использованием LIMIT и OFFSET
+            cur.execute(
+                """
+                SELECT id, username, full_name, registration_date, dob
+                FROM users
+                ORDER BY registration_date DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset)
+            )
+            
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            users_on_page = [dict(zip(columns, row)) for row in rows]
+            
+            return users_on_page, total_users
+
+def get_user_by_id(user_id: int):
+    """Возвращает все данные одного пользователя по его ID."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                raise NotFoundError("Пользователь с таким ID не найден.")
+            
+            columns = [desc[0] for desc in cur.description]
+            return dict(zip(columns, row))
+        
+def delete_user_by_admin(user_id: int):
+    """
+    Выполняет каскадное "удаление" пользователя:
+    1. Находит все невозвращенные книги пользователя.
+    2. Увеличивает количество доступных экземпляров для каждой книги.
+    3. Помечает все его записи о займе как возвращенные.
+    4. Анонимизирует данные пользователя в таблице users.
+    Все операции выполняются в одной транзакции.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                # 1. Найти все активные займы (borrowed_books) и ID книг
+                cur.execute(
+                    "SELECT book_id FROM borrowed_books WHERE user_id = %s AND return_date IS NULL",
+                    (user_id,)
+                )
+                book_ids_to_return = [item[0] for item in cur.fetchall()]
+
+                # 2. Увеличить available_quantity для каждой возвращаемой книги
+                if book_ids_to_return:
+                    for book_id in book_ids_to_return:
+                        cur.execute(
+                            "UPDATE books SET available_quantity = available_quantity + 1 WHERE id = %s",
+                            (book_id,)
+                        )
+                
+                # 3. Пометить все займы пользователя как возвращенные
+                cur.execute(
+                    "UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE user_id = %s AND return_date IS NULL",
+                    (user_id,)
+                )
+
+                # 4. Анонимизировать пользователя
+                anonymized_username = f"deleted_user_{user_id}"
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET username = %s, full_name = '(удален админом)', contact_info = %s,
+                        password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL
+                    WHERE id = %s
+                    """,
+                    (anonymized_username, anonymized_username, user_id)
+                )
+
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось удалить пользователя: {e}")
+            
+def get_user_ratings(user_id: int):
+    """Возвращает историю оценок пользователя (книга и оценка)."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT b.name as book_name, r.rating
+                FROM ratings r
+                JOIN books b ON r.book_id = b.id
+                WHERE r.user_id = %s
+                ORDER BY b.name
+                """,
+                (user_id,)
+            )
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+        
+def delete_user_by_self(user_id: int):
+    """
+    Анонимизирует пользователя по его собственной просьбе.
+    Сначала проверяет, есть ли у него книги на руках.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                # 1. Проверяем, есть ли у пользователя невозвращенные книги
+                cur.execute(
+                    "SELECT 1 FROM borrowed_books WHERE user_id = %s AND return_date IS NULL",
+                    (user_id,)
+                )
+                if cur.fetchone():
+                    # Если есть хотя бы одна запись, возвращаем ошибку
+                    return "У вас есть невозвращенные книги. Удаление невозможно."
+
+                # 2. Если книг нет, анонимизируем пользователя
+                anonymized_username = f"deleted_user_{user_id}"
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET username = %s, full_name = '(удален)', contact_info = %s,
+                        password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL
+                    WHERE id = %s
+                    """,
+                    (anonymized_username, anonymized_username, user_id)
+                )
+
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось удалить пользователя: {e}")

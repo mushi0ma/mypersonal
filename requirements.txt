@@ -5,3 +5,4 @@ celery
 redis
 sendgrid
 twilio
+pywhatkit

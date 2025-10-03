@@ -1,13 +1,22 @@
 # -*- coding: utf-8 -*-
 import os
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, 
+    CommandHandler, 
+    MessageHandler, 
+    filters, 
+    ContextTypes, 
+    ConversationHandler, 
+    CallbackQueryHandler
+)
 
 # --- Загрузка переменных окружения ---
 load_dotenv()
-ADMIN_BOT_TOKEN = os.getenv("8284942434:AAH1DG3KpV3Y0JKvg80PRGvIm74GoVtS0r8")
-ADMIN_TELEGRAM_ID = int(os.getenv("1101597449")) # Загружаем ID админа
+ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN")
+ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
 
 # --- Импорт наших модулей ---
 import db_data
@@ -37,22 +46,181 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Обрабатывает и рассылает сообщение."""
     message_text = update.message.text
     await update.message.reply_text("Начинаю рассылку...")
-    
+
     try:
-        # user_ids = db_data.get_all_user_ids() # Нужна эта функция в db_data.py
-        # for user_id in user_ids:
-        #     send_telegram_message.delay(user_id, message_text)
-        await update.message.reply_text(f"Рассылка завершена. Сообщение отправлено N пользователям.")
+        user_ids = db_data.get_all_user_ids()
+        for user_id in user_ids:
+            send_telegram_message.delay(user_id, message_text)
+        await update.message.reply_text(f"Рассылка запущена для {len(user_ids)} пользователей.")
     except Exception as e:
         await update.message.reply_text(f"Ошибка при рассылке: {e}")
-        
+
     return ConversationHandler.END
+
+def calculate_age(dob_string: str) -> str:
+    """Вычисляет возраст на основе строки с датой рождения (ДД.ММ.ГГГГ)."""
+    if not dob_string:
+        return "?? лет"
+    try:
+        birth_date = datetime.strptime(dob_string, "%d.%m.%Y")
+        today = datetime.today()
+        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+        return f"{age} лет"
+    except (ValueError, TypeError):
+        return "?? лет"
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает статистику с постраничным списком пользователей."""
+    query = update.callback_query
+    page = 0
+    users_per_page = 5
+
+    if query:
+        await query.answer()
+        page = int(query.data.split('_')[2])
+    
+    context.user_data['current_stats_page'] = page
+    offset = page * users_per_page
+    
+    try:
+        users, total_users = db_data.get_all_users(limit=users_per_page, offset=offset)
+        
+        if not users and page == 0:
+            await update.message.reply_text("В базе данных пока нет зарегистрированных пользователей.")
+            return
+
+        message_text = f"👤 **Всего пользователей: {total_users}**\n\nСтраница {page + 1}:\nНажмите на пользователя для просмотра деталей."
+        
+        # Инициализируем `keyboard` только ОДИН раз
+        keyboard = []
+        for user in users:
+            button_text = f"👤 {user['username']} ({user['full_name']})"
+            callback_data = f"admin_view_user_{user['id']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+
+        # Создаем отдельный список для кнопок навигации
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"stats_page_{page - 1}"))
+        
+        if (page + 1) * users_per_page < total_users:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"stats_page_{page + 1}"))
+        
+        # Добавляем ряд с кнопками навигации в конец существующего списка `keyboard`
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        if query:
+            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        error_text = f"Произошла ошибка при получении статистики: {e}"
+
+async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает детальную карточку пользователя с историей и кнопками действий."""
+    query = update.callback_query
+    await query.answer()
+
+    current_page = context.user_data.get('current_stats_page', 0)
+    user_id = int(query.data.split('_')[3])
+    
+    try:
+        user = db_data.get_user_by_id(user_id)
+        borrow_history = db_data.get_user_borrow_history(user_id)
+        rating_history = db_data.get_user_ratings(user_id) # <<-- ПОЛУЧАЕМ ИСТОРИЮ ОЦЕНОК
+
+        reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
+        age = calculate_age(user['dob'])
+        
+        message_parts = [
+            f"**Карточка пользователя: `{user['username']}`**",
+            f"**ФИО:** {user['full_name']}",
+            f"**Возраст:** {age}",
+            f"**Статус:** {user['status']}",
+            f"**Контакт:** {user['contact_info']}",
+            f"**Регистрация:** {reg_date}\n",
+            "**История взятых книг:**"
+        ]
+
+        if borrow_history:
+            for item in borrow_history:
+                return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "не возвращена"
+                borrow_date_str = item['borrow_date'].strftime('%d.%m.%Y')
+                message_parts.append(f" - `{item['book_name']}` (взята: {borrow_date_str}, возвращена: {return_date_str})")
+        else:
+            message_parts.append("Пользователь еще не брал ни одной книги.")
+            
+        # --- ДОБАВЛЕН НОВЫЙ БЛОК ДЛЯ ОТОБРАЖЕНИЯ ОЦЕНОК ---
+        message_parts.append("\n**История оценок:**")
+        if rating_history:
+            for item in rating_history:
+                stars = "⭐" * item['rating'] # Превращаем число в звезды
+                message_parts.append(f" - `{item['book_name']}`: {stars}")
+        else:
+            message_parts.append("Пользователь еще не поставил ни одной оценки.")
+        # --- КОНЕЦ НОВОГО БЛОКА ---
+            
+        message_text = "\n".join(message_parts)
+
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Удалить пользователя", callback_data=f"admin_delete_user_{user_id}")],
+            [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"stats_page_{current_page}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        await query.edit_message_text(f"Произошла ошибка: {e}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отменяет текущий диалог."""
     await update.message.reply_text("Действие отменено.")
     return ConversationHandler.END
 
+async def ask_for_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Спрашивает у админа подтверждение на удаление."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = int(query.data.split('_')[3])
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"admin_confirm_delete_{user_id}")],
+        # Кнопка "Нет" просто вернет нас на карточку пользователя
+        [InlineKeyboardButton("❌ Нет, отмена", callback_data=f"admin_view_user_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "Вы уверены, что хотите удалить этого пользователя?\n\n"
+        "Это действие вернет все его книги в библиотеку и обезличит аккаунт. "
+        "История действий при этом сохранится.",
+        reply_markup=reply_markup
+    )
+
+async def process_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает подтверждение и удаляет пользователя."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = int(query.data.split('_')[3])
+    current_page = context.user_data.get('current_stats_page', 0)
+    
+    try:
+        result = db_data.delete_user_by_admin(user_id)
+        await query.edit_message_text(f"Пользователь успешно удален. {result}")
+    except Exception as e:
+        await query.edit_message_text(f"Ошибка при удалении: {e}")
+        
+    # После удаления возвращаем админа к списку пользователей
+    # Для этого "обманем" контекст, как будто была нажата кнопка навигации
+    query.data = f"stats_page_{current_page}"
+    await stats(update, context)
 
 def main() -> None:
     application = Application.builder().token(ADMIN_BOT_TOKEN).build()
@@ -67,7 +235,14 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start, filters=admin_filter))
     application.add_handler(broadcast_handler)
+    application.add_handler(CommandHandler("stats", stats, filters=admin_filter))
     
+    application.add_handler(CallbackQueryHandler(stats, pattern="^stats_page_"))
+    application.add_handler(CallbackQueryHandler(view_user_profile, pattern="^admin_view_user_"))
+
+    application.add_handler(CallbackQueryHandler(ask_for_delete_confirmation, pattern="^admin_delete_user_"))
+    application.add_handler(CallbackQueryHandler(process_delete_confirmation, pattern="^admin_confirm_delete_"))
+
     print("✅ Админ-бот запущен.")
     application.run_polling()
 

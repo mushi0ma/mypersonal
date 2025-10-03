@@ -1,3 +1,18 @@
+# Environments
 .env
+.venv
+venv/
+env/
+
+# Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Celery files
+celerybeat-schedule*
+
+# IDE / Editor specific
+.idea/
+.vscode/
