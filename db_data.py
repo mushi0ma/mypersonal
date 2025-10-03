@@ -316,3 +316,54 @@ def get_user_by_id(user_id: int):
             
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
+        
+def delete_user_by_admin(user_id: int):
+    """
+    Выполняет каскадное "удаление" пользователя:
+    1. Находит все невозвращенные книги пользователя.
+    2. Увеличивает количество доступных экземпляров для каждой книги.
+    3. Помечает все его записи о займе как возвращенные.
+    4. Анонимизирует данные пользователя в таблице users.
+    Все операции выполняются в одной транзакции.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                # 1. Найти все активные займы (borrowed_books) и ID книг
+                cur.execute(
+                    "SELECT book_id FROM borrowed_books WHERE user_id = %s AND return_date IS NULL",
+                    (user_id,)
+                )
+                book_ids_to_return = [item[0] for item in cur.fetchall()]
+
+                # 2. Увеличить available_quantity для каждой возвращаемой книги
+                if book_ids_to_return:
+                    for book_id in book_ids_to_return:
+                        cur.execute(
+                            "UPDATE books SET available_quantity = available_quantity + 1 WHERE id = %s",
+                            (book_id,)
+                        )
+                
+                # 3. Пометить все займы пользователя как возвращенные
+                cur.execute(
+                    "UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE user_id = %s AND return_date IS NULL",
+                    (user_id,)
+                )
+
+                # 4. Анонимизировать пользователя
+                anonymized_username = f"deleted_user_{user_id}"
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET username = %s, full_name = '(удален админом)', contact_info = %s,
+                        password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL
+                    WHERE id = %s
+                    """,
+                    (anonymized_username, anonymized_username, user_id)
+                )
+
+                conn.commit()
+                return "Успешно"
+            except psycopg2.Error as e:
+                conn.rollback()
+                raise DatabaseError(f"Не удалось удалить пользователя: {e}")

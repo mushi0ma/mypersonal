@@ -173,6 +173,45 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Действие отменено.")
     return ConversationHandler.END
 
+async def ask_for_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Спрашивает у админа подтверждение на удаление."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = int(query.data.split('_')[3])
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Да, удалить", callback_data=f"admin_confirm_delete_{user_id}")],
+        # Кнопка "Нет" просто вернет нас на карточку пользователя
+        [InlineKeyboardButton("❌ Нет, отмена", callback_data=f"admin_view_user_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "Вы уверены, что хотите удалить этого пользователя?\n\n"
+        "Это действие вернет все его книги в библиотеку и обезличит аккаунт. "
+        "История действий при этом сохранится.",
+        reply_markup=reply_markup
+    )
+
+async def process_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает подтверждение и удаляет пользователя."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = int(query.data.split('_')[3])
+    current_page = context.user_data.get('current_stats_page', 0)
+    
+    try:
+        result = db_data.delete_user_by_admin(user_id)
+        await query.edit_message_text(f"Пользователь успешно удален. {result}")
+    except Exception as e:
+        await query.edit_message_text(f"Ошибка при удалении: {e}")
+        
+    # После удаления возвращаем админа к списку пользователей
+    # Для этого "обманем" контекст, как будто была нажата кнопка навигации
+    query.data = f"stats_page_{current_page}"
+    await stats(update, context)
 
 def main() -> None:
     application = Application.builder().token(ADMIN_BOT_TOKEN).build()
@@ -191,6 +230,9 @@ def main() -> None:
     
     application.add_handler(CallbackQueryHandler(stats, pattern="^stats_page_"))
     application.add_handler(CallbackQueryHandler(view_user_profile, pattern="^admin_view_user_"))
+
+    application.add_handler(CallbackQueryHandler(ask_for_delete_confirmation, pattern="^admin_delete_user_"))
+    application.add_handler(CallbackQueryHandler(process_delete_confirmation, pattern="^admin_confirm_delete_"))
 
     print("✅ Админ-бот запущен.")
     application.run_polling()
