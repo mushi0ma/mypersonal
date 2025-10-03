@@ -329,7 +329,8 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     password = update.message.text
     
     # Сразу удаляем сообщение с паролем для безопасности
-    await update.message.delete()
+    hidden_password_text = "•" * len(password)
+    await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
 
     if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", password):
         await update.message.reply_text("❌ Пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол. Попробуйте снова.")
@@ -349,7 +350,8 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
     password_confirm = update.message.text
     
     # Сразу удаляем сообщение с паролем
-    await update.message.delete()
+    hidden_password_text = "•" * len(password_confirm)
+    await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
 
     # Сравниваем с сохраненным паролем
     if context.user_data['registration'].get('password_temp') != password_confirm:
@@ -494,7 +496,8 @@ async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     new_password = update.message.text
     
     # Удаляем сообщение с паролем
-    await update.message.delete()
+    hidden_password_text = "•" * len(new_password)
+    await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
 
     if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", new_password):
         await update.message.reply_text("❌ Новый пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол.")
@@ -512,7 +515,8 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
     password_confirm = update.message.text
     
     # Удаляем сообщение с паролем
-    await update.message.delete()
+    hidden_password_text = "•" * len(password_confirm)
+    await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
 
     if context.user_data.get('forgot_password_temp') != password_confirm:
         await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, введите новый пароль заново.")
