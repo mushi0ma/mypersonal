@@ -279,3 +279,28 @@ def get_user_borrow_history(user_id: int):
             )
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+def get_all_users(limit: int, offset: int):
+    """Возвращает порцию пользователей для постраничной навигации и общее количество."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # Получаем общее количество пользователей
+            cur.execute("SELECT COUNT(*) FROM users")
+            total_users = cur.fetchone()[0]
+
+            # Получаем срез пользователей с использованием LIMIT и OFFSET
+            cur.execute(
+                """
+                SELECT id, username, full_name, registration_date
+                FROM users
+                ORDER BY registration_date DESC
+                LIMIT %s OFFSET %s
+                """,
+                (limit, offset)
+            )
+            
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            users_on_page = [dict(zip(columns, row)) for row in rows]
+            
+            return users_on_page, total_users

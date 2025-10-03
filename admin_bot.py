@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 import os
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application, 
+    CommandHandler, 
+    MessageHandler, 
+    filters, 
+    ContextTypes, 
+    ConversationHandler, 
+    CallbackQueryHandler
+)
 
 # --- Загрузка переменных окружения ---
 load_dotenv()
@@ -49,11 +57,60 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ConversationHandler.END
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет статистику (пока заглушка)."""
-    # TODO: В будущем здесь будет логика подсчета пользователей, книг и т.д.
-    # user_count = db_data.get_user_count() 
-    # book_count = db_data.get_book_count()
-    # await update.message.reply_text(f"Пользователей в базе: {user_count}\nВсего книг: {book_count}")
+    """Показывает статистику с постраничным списком пользователей."""
+    query = update.callback_query
+    page = 0
+    users_per_page = 5 # Сколько пользователей показывать на одной странице
+
+    if query:
+        await query.answer()
+        # Извлекаем номер страницы из callback_data (e.g., "stats_page_1")
+        page = int(query.data.split('_')[2])
+    
+    # Считаем смещение для SQL-запроса
+    offset = page * users_per_page
+    
+    try:
+        users, total_users = db_data.get_all_users(limit=users_per_page, offset=offset)
+        
+        if not users:
+            message_text = "В базе данных пока нет зарегистрированных пользователей."
+            await update.message.reply_text(message_text)
+            return
+
+        # Формируем сообщение
+        message_text = f"👤 **Всего пользователей: {total_users}**\n\nСтраница {page + 1}:\n"
+        for user in users:
+            reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
+            message_text += f"• `{user['username']}` ({user['full_name']}) - рег: {reg_date}\n"
+
+        # Создаем кнопки навигации
+        keyboard = []
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"stats_page_{page - 1}"))
+        
+        # Проверяем, есть ли еще пользователи для следующей страницы
+        if (page + 1) * users_per_page < total_users:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"stats_page_{page + 1}"))
+        
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Отправляем или редактируем сообщение
+        if query:
+            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        error_text = f"Произошла ошибка при получении статистики: {e}"
+        if query:
+            await query.edit_message_text(error_text)
+        else:
+            await update.message.reply_text(error_text)
 
     await update.message.reply_text("Раздел статистики в разработке.")
 
@@ -76,8 +133,10 @@ def main() -> None:
 
     application.add_handler(CommandHandler("start", start, filters=admin_filter))
     application.add_handler(broadcast_handler)
-
     application.add_handler(CommandHandler("stats", stats, filters=admin_filter))
+    
+    # --- ДОБАВЬТЕ ЭТУ СТРОКУ ---
+    application.add_handler(CallbackQueryHandler(stats, pattern="^stats_page_"))
 
     print("✅ Админ-бот запущен.")
     application.run_polling()
