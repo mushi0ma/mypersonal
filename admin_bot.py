@@ -73,47 +73,45 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает статистику с постраничным списком пользователей."""
     query = update.callback_query
     page = 0
-    users_per_page = 5 # Сколько пользователей показывать на одной странице
+    users_per_page = 5
 
     if query:
         await query.answer()
-        # Извлекаем номер страницы из callback_data (e.g., "stats_page_1")
         page = int(query.data.split('_')[2])
     
-    # Считаем смещение для SQL-запроса
+    context.user_data['current_stats_page'] = page
     offset = page * users_per_page
     
     try:
         users, total_users = db_data.get_all_users(limit=users_per_page, offset=offset)
         
-        if not users:
-            message_text = "В базе данных пока нет зарегистрированных пользователей."
-            await update.message.reply_text(message_text)
+        if not users and page == 0:
+            await update.message.reply_text("В базе данных пока нет зарегистрированных пользователей.")
             return
 
-        # Формируем сообщение
-        message_text = f"👤 **Всего пользователей: {total_users}**\n\nСтраница {page + 1}:\n"
-        for user in users:
-            reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
-            age = calculate_age(user['dob'])
-            message_text += f"• `{user['username']}` ({user['full_name']}, {age}) - рег: {reg_date}\n"
-
-        # Создаем кнопки навигации
+        message_text = f"👤 **Всего пользователей: {total_users}**\n\nСтраница {page + 1}:\nНажмите на пользователя для просмотра деталей."
+        
+        # Инициализируем `keyboard` только ОДИН раз
         keyboard = []
+        for user in users:
+            button_text = f"👤 {user['username']} ({user['full_name']})"
+            callback_data = f"admin_view_user_{user['id']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+
+        # Создаем отдельный список для кнопок навигации
         nav_buttons = []
         if page > 0:
             nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"stats_page_{page - 1}"))
         
-        # Проверяем, есть ли еще пользователи для следующей страницы
         if (page + 1) * users_per_page < total_users:
             nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"stats_page_{page + 1}"))
         
+        # Добавляем ряд с кнопками навигации в конец существующего списка `keyboard`
         if nav_buttons:
             keyboard.append(nav_buttons)
         
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Отправляем или редактируем сообщение
         if query:
             await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
         else:
@@ -121,12 +119,54 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         error_text = f"Произошла ошибка при получении статистики: {e}"
-        if query:
-            await query.edit_message_text(error_text)
-        else:
-            await update.message.reply_text(error_text)
 
-    await update.message.reply_text("Раздел статистики в разработке.")
+async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает детальную карточку пользователя с историей и кнопками действий."""
+    query = update.callback_query
+    await query.answer()
+
+    # Сохраняем текущую страницу, чтобы кнопка "Назад" работала
+    current_page = context.user_data.get('current_stats_page', 0)
+    user_id = int(query.data.split('_')[3])
+    
+    try:
+        user = db_data.get_user_by_id(user_id)
+        history = db_data.get_user_borrow_history(user_id)
+
+        reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
+        age = calculate_age(user['dob'])
+        
+        message_parts = [
+            f"**Карточка пользователя: `{user['username']}`**",
+            f"**ФИО:** {user['full_name']}",
+            f"**Возраст:** {age}",
+            f"**Статус:** {user['status']}",
+            f"**Контакт:** {user['contact_info']}",
+            f"**Регистрация:** {reg_date}\n",
+            "**История взятых книг:**"
+        ]
+
+        if history:
+            for item in history:
+                return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "не возвращена"
+                borrow_date_str = item['borrow_date'].strftime('%d.%m.%Y')
+                message_parts.append(f" - `{item['book_name']}` (взята: {borrow_date_str}, возвращена: {return_date_str})")
+        else:
+            message_parts.append("Пользователь еще не брал ни одной книги.")
+            
+        message_text = "\n".join(message_parts)
+
+        # Кнопки действий
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Удалить пользователя", callback_data=f"admin_delete_user_{user_id}")],
+            [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"stats_page_{current_page}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        await query.edit_message_text(f"Произошла ошибка: {e}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отменяет текущий диалог."""
@@ -149,8 +189,8 @@ def main() -> None:
     application.add_handler(broadcast_handler)
     application.add_handler(CommandHandler("stats", stats, filters=admin_filter))
     
-    # --- ДОБАВЬТЕ ЭТУ СТРОКУ ---
     application.add_handler(CallbackQueryHandler(stats, pattern="^stats_page_"))
+    application.add_handler(CallbackQueryHandler(view_user_profile, pattern="^admin_view_user_"))
 
     print("✅ Админ-бот запущен.")
     application.run_polling()

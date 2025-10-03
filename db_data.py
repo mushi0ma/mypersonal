@@ -304,3 +304,15 @@ def get_all_users(limit: int, offset: int):
             users_on_page = [dict(zip(columns, row)) for row in rows]
             
             return users_on_page, total_users
+
+def get_user_by_id(user_id: int):
+    """Возвращает все данные одного пользователя по его ID."""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                raise NotFoundError("Пользователь с таким ID не найден.")
+            
+            columns = [desc[0] for desc in cur.description]
+            return dict(zip(columns, row))
