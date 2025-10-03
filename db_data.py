@@ -291,7 +291,7 @@ def get_all_users(limit: int, offset: int):
             # Получаем срез пользователей с использованием LIMIT и OFFSET
             cur.execute(
                 """
-                SELECT id, username, full_name, registration_date
+                SELECT id, username, full_name, registration_date, dob
                 FROM users
                 ORDER BY registration_date DESC
                 LIMIT %s OFFSET %s

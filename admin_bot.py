@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
@@ -56,6 +57,18 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     return ConversationHandler.END
 
+def calculate_age(dob_string: str) -> str:
+    """Вычисляет возраст на основе строки с датой рождения (ДД.ММ.ГГГГ)."""
+    if not dob_string:
+        return "?? лет"
+    try:
+        birth_date = datetime.strptime(dob_string, "%d.%m.%Y")
+        today = datetime.today()
+        age = today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day))
+        return f"{age} лет"
+    except (ValueError, TypeError):
+        return "?? лет"
+
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает статистику с постраничным списком пользователей."""
     query = update.callback_query
@@ -82,7 +95,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_text = f"👤 **Всего пользователей: {total_users}**\n\nСтраница {page + 1}:\n"
         for user in users:
             reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
-            message_text += f"• `{user['username']}` ({user['full_name']}) - рег: {reg_date}\n"
+            age = calculate_age(user['dob'])
+            message_text += f"• `{user['username']}` ({user['full_name']}, {age}) - рег: {reg_date}\n"
 
         # Создаем кнопки навигации
         keyboard = []
