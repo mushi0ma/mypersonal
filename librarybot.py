@@ -328,18 +328,23 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return REGISTER_PASSWORD
 
     user_info = update.message.from_user
+    
+    # 1. Добавляем пароль в "корзину" с данными. Юзернейм там уже лежит с прошлого шага.
     context.user_data['registration']['password'] = new_password
     context.user_data['registration']['telegram_id'] = user_info.id
     context.user_data['registration']['telegram_username'] = user_info.username if user_info.username else None
 
+    # 2. Передаем ВСЮ "корзину" (context.user_data['registration']) в функцию add_user.
+    #    Функция add_user в файле db_data.py теперь ожидает, что в этой "корзине" будет ключ 'username'.
     try:
+        # Мы вызываем ту же функцию, что и раньше, но теперь она должна уметь обрабатывать 'username'
         user_id = db_data.add_user(context.user_data['registration'])
         await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти, используя /start.")
     except db_data.UserExistsError:
-         await update.message.reply_text("❌ Ошибка при регистрации. Возможно, имя пользователя/контакт уже заняты.")
+         await update.message.reply_text("Ошибка при регистрации. Возможно, этот юзернейм или контакт уже заняты.")
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}")
-        await update.message.reply_text("❌ Произошла системная ошибка при регистрации.")
+        await update.message.reply_text("Произошла системная ошибка при регистрации.")
 
     context.user_data.clear()
     return await start(update, context)
@@ -358,7 +363,7 @@ async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "Введите ваш **контакт** (email, телефон, username) для входа:",
+        "Введите ваш **юзернейм** или **контакт** (email, телефон) для входа:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -882,10 +887,13 @@ def main() -> None:
                 # Назад: к вводу VERIFY_CODE
                 CallbackQueryHandler(get_contact, pattern="^back_REGISTER_VERIFY_CODE$")
             ],
+            REGISTER_USERNAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_username),
+                CallbackQueryHandler(verify_registration_code, pattern="^back_REGISTER_STATUS$")
+            ],
             REGISTER_PASSWORD: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_password),
-                # Назад: к выбору STATUS
-                CallbackQueryHandler(verify_registration_code, pattern="^back_REGISTER_STATUS$") # Должно быть verify_code, которое переспрашивает статус
+                CallbackQueryHandler(get_status, pattern="^back_REGISTER_USERNAME$")
             ],
 
             # --- Вход ---

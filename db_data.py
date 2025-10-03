@@ -19,16 +19,16 @@ class UserExistsError(DatabaseError):
 
 
 def get_user_by_login(login_query: str):
-    """Ищет пользователя по УНИКАЛЬНОМУ полю: contact_info или telegram_username."""
+    """Ищет пользователя по УНИКАЛЬНОМУ полю: username, contact_info или telegram_username."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, full_name, contact_info, status, password_hash, telegram_id, telegram_username
+                SELECT id, full_name, contact_info, status, password_hash, telegram_id, telegram_username, username
                 FROM users
-                WHERE contact_info = %s OR telegram_username = %s
+                WHERE username = %s OR contact_info = %s OR telegram_username = %s
                 """,
-                (login_query, login_query)
+                (login_query, login_query, login_query)
             )
             row = cur.fetchone()
             if not row:
@@ -45,11 +45,11 @@ def add_user(data: dict):
             try:
                 cur.execute(
                     """
-                    INSERT INTO users (telegram_id, telegram_username, full_name, dob, contact_info, status, password_hash, registration_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO users (username, telegram_id, telegram_username, full_name, dob, contact_info, status, password_hash, registration_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id;
                     """,
-                    (data.get('telegram_id'), data.get('telegram_username'), data['full_name'], data['dob'], data['contact_info'], data['status'], hashed_pass, datetime.now())
+                    (data['username'], data.get('telegram_id'), data.get('telegram_username'), data['full_name'], data['dob'], data['contact_info'], data['status'], hashed_pass, datetime.now())
                 )
                 user_id = cur.fetchone()[0]
                 conn.commit()
