@@ -22,7 +22,6 @@ from db_utils import hash_password
 from tasks import create_and_send_notification, send_telegram_message
 
 # --- ИМПОРТ СЕРВИСОВ ---
-from twilio.rest import Client
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
@@ -35,19 +34,6 @@ logger = logging.getLogger(__name__)
 
 # --- Загрузка конфигурации из .env ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
-
-# Учетные данные Twilio/SendGrid
-account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-try:
-    twilio_client = Client(account_sid, auth_token)
-except Exception:
-    logger.warning("Twilio client init failed. SMS verification might be disabled.")
-    twilio_client = None
-
-SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
-FROM_EMAIL = os.getenv("FROM_EMAIL")
 
 # --- СОСТОЯНИЯ ДИАЛОГА ---
 (
@@ -80,15 +66,13 @@ def normalize_phone_number(contact: str) -> str:
         return contact
     return contact
 
-def send_whatsapp_code(contact: str, code: str):
-    logger.warning("Попытка отправки через WhatsApp/pywhatkit (отключено в Docker).")
-    return False
+def get_user_borrow_limit(status):
+    return {'студент': 3, 'учитель': 5}.get(status.lower(), 0)
 
 async def send_local_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> bool:
     """Отправляет код верификации через Celery (старый метод, т.к. user_id еще нет)."""
     try:
         message_body = f"Ваш код для библиотеки: {code}"
-        # Для верификации при регистрации используем старую задачу, т.к. user_id еще не создан
         send_telegram_message.delay(telegram_id, message_body)
         context.user_data['verification_method'] = 'telegram_notifier'
         return True
@@ -97,76 +81,73 @@ async def send_local_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE
         return False
 
 async def send_verification_message(contact_info: str, code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int):
+    # Email
     if re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", contact_info):
-        if not SENDGRID_API_KEY:
-            logger.error("API ключ для SendGrid не настроен. Email верификация невозможна.")
-            return False
         try:
             message_body = f"Ваш код для библиотеки: {code}"
-            message = Mail(from_email=FROM_EMAIL, to_emails=contact_info, subject='Код верификации для библиотеки', html_content=f'<strong>{message_body}</strong>')
-            sg = SendGridAPIClient(SENDGRID_API_KEY)
+            message = Mail(from_email=os.getenv("FROM_EMAIL"), to_emails=contact_info, subject='Код верификации', html_content=f'<strong>{message_body}</strong>')
+            sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
             sg.send(message)
             context.user_data['verification_method'] = 'email'
             return True
         except Exception as e:
             logger.error(f"Ошибка при отправке email: {e}")
             return False
-    if re.match(r"^\+\d{1,14}$", contact_info):
-        if send_whatsapp_code(contact_info, code):
-            context.user_data['verification_method'] = 'pywhatkit'
-            return True
-        return False
+    # Fallback to Telegram
     return await send_local_code_telegram(code, context, telegram_id)
 
 def get_back_button(current_state_const: int) -> list:
+    """Генерирует кнопку 'Назад', используя имя константы состояния."""
     state_name = [name for name, val in globals().items() if val == current_state_const and name.isupper() and '_' in name][0]
     return [InlineKeyboardButton("⬅️ Назад", callback_data=f"back_{state_name}")]
-
-def get_user_borrow_limit(status):
-    return {'студент': 3, 'учитель': 5}.get(status.lower(), 0)
 
 # --------------------------
 # --- ОСНОВНЫЕ ОБРАБОТЧИКИ ---
 # --------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начальная точка диалога, показывает кнопки входа/регистрации."""
     context.user_data.clear()
     keyboard = [
         [InlineKeyboardButton("Войти", callback_data="login")],
         [InlineKeyboardButton("Зарегистрироваться", callback_data="register")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     if update.callback_query:
         await update.callback_query.edit_message_text("Добро пожаловать в библиотеку! 📚", reply_markup=reply_markup)
     else:
-        await update.message.reply_text("Добро пожаловать в библиотеку! 📚", reply_markup=reply_markup)
+        if update.message:
+            await update.message.delete()
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="Добро пожаловать в библиотеку! 📚", reply_markup=reply_markup)
+        
     return START_ROUTES
 
 # --- ФУНКЦИИ РЕГИСТРАЦИИ ---
 
 async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает процесс регистрации."""
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
     context.user_data['registration'] = {}
-    reply_markup = InlineKeyboardMarkup([get_back_button(START_ROUTES)])
-    await query.edit_message_text("Введите ваше **ФИО** (полностью, например: Иванов Иван Иванович):", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("Начинаем регистрацию. Введите ваше **ФИО**:", parse_mode='Markdown')
     return REGISTER_NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает ФИО и запрашивает дату рождения."""
     context.user_data['registration']['full_name'] = update.message.text
-    reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_NAME)])
-    await update.message.reply_text("Введите **дату рождения** (ДД.ММ.ГГГГ):", reply_markup=reply_markup, parse_mode='Markdown')
+    await update.message.reply_text("Введите **дату рождения** (ДД.ММ.ГГГГ):", parse_mode='Markdown')
     return REGISTER_DOB
 
 async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает дату рождения и запрашивает контакт."""
     dob = update.message.text
     if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", dob):
-        await update.message.reply_text("Неверный формат. Используйте формат **ДД.ММ.ГГГГ**.")
+        await update.message.reply_text("Неверный формат. Используйте **ДД.ММ.ГГГГ**.")
         return REGISTER_DOB
     context.user_data['registration']['dob'] = dob
-    reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_DOB)])
-    await update.message.reply_text("Введите ваш **контакт** (email, телефон в формате +7... или @username):", reply_markup=reply_markup, parse_mode='Markdown')
+    await update.message.reply_text("Введите ваш **контакт** (email, телефон +7... или @username):", parse_mode='Markdown')
     return REGISTER_CONTACT
 
 async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -191,10 +172,10 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return REGISTER_CONTACT
 
 async def verify_registration_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Проверяет код верификации и запрашивает статус."""
     if update.message.text == context.user_data.get('verification_code'):
         keyboard = [
-            [InlineKeyboardButton("Студент", callback_data="студент"), InlineKeyboardButton("Преподаватель", callback_data="учитель")],
-            get_back_button(REGISTER_VERIFY_CODE)
+            [InlineKeyboardButton("Студент", callback_data="студент"), InlineKeyboardButton("Преподаватель", callback_data="учитель")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text("Код верный! Теперь выберите ваш статус:", reply_markup=reply_markup)
@@ -205,42 +186,46 @@ async def verify_registration_code(update: Update, context: ContextTypes.DEFAULT
         return REGISTER_VERIFY_CODE
 
 async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает статус и запрашивает юзернейм."""
     query = update.callback_query
     await query.answer()
     context.user_data['registration']['status'] = query.data
-    reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_STATUS)])
-    await query.edit_message_text("Придумайте **юзернейм** (на английском, без пробелов, например: `ivanov21`):", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("Придумайте **юзернейм** (на английском, без пробелов, например: `ivanov21`):", parse_mode='Markdown')
     return REGISTER_USERNAME
 
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает юзернейм и запрашивает пароль."""
     username = update.message.text
     if not re.match(r"^[a-zA-Z0-9_]{3,}$", username):
-        await update.message.reply_text("❌ Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'. Попробуйте снова.")
+        await update.message.reply_text("❌ Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'.")
         return REGISTER_USERNAME
     context.user_data['registration']['username'] = username
-    reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_USERNAME)])
-    await update.message.reply_text("Создайте **пароль** (минимум 8 символов):", reply_markup=reply_markup, parse_mode='Markdown')
+    await update.message.reply_text("Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
     return REGISTER_PASSWORD
 
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает первый пароль, сохраняет его и запрашивает подтверждение."""
     password = update.message.text
     hidden_password_text = "•" * len(password)
     await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
     if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", password):
-        await update.message.reply_text("❌ Пароль должен содержать минимум 8 символов, включая буквы и хотя бы одну цифру или спецсимвол. Попробуйте снова.")
+        await update.message.reply_text("❌ Пароль должен содержать минимум 8 символов, включая буквы и цифры/спецсимволы. Попробуйте снова.")
         return REGISTER_PASSWORD
     context.user_data['registration']['password_temp'] = password
-    reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_PASSWORD)])
-    await update.message.reply_text("Отлично. Теперь **введите пароль еще раз** для подтверждения:", reply_markup=reply_markup, parse_mode='Markdown')
+    await update.message.reply_text("Отлично. Теперь **введите пароль еще раз** для подтверждения:", parse_mode='Markdown')
     return REGISTER_CONFIRM_PASSWORD
 
 async def get_password_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает второй пароль, сравнивает и завершает регистрацию."""
     password_confirm = update.message.text
     hidden_password_text = "•" * len(password_confirm)
     await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
     if context.user_data['registration'].get('password_temp') != password_confirm:
-        await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, создайте пароль заново.")
-        return await get_username(update, context) # Re-ask previous step for better UX
+        await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, придумайте пароль заново.")
+        # Возвращаемся на шаг назад, чтобы переспросить первый пароль
+        await update.message.reply_text("Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
+        return REGISTER_PASSWORD
+
     context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
     user_info = update.message.from_user
     context.user_data['registration']['telegram_id'] = user_info.id
@@ -248,12 +233,12 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
     try:
         user_id = db_data.add_user(context.user_data['registration'])
         db_data.log_activity(user_id=user_id, action="registration")
-        await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти, используя /start.")
+        await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти.")
     except db_data.UserExistsError:
-        await update.message.reply_text("❌ Ошибка при регистрации. Возможно, этот юзернейм или контакт уже заняты.")
+        await update.message.reply_text("❌ Ошибка: этот юзернейм или контакт уже заняты.")
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}")
-        await update.message.reply_text("❌ Произошла системная ошибка при регистрации.")
+        await update.message.reply_text("❌ Произошла системная ошибка.")
     context.user_data.clear()
     return await start(update, context)
 
@@ -262,12 +247,9 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
 async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Забыли пароль?", callback_data="forgot_password")],
-        get_back_button(START_ROUTES)
-    ]
+    keyboard = [[InlineKeyboardButton("Забыли пароль?", callback_data="forgot_password")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Введите ваш **юзернейм** или **контакт** (email, телефон) для входа:", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("Введите ваш **юзернейм** или **контакт** для входа:", reply_markup=reply_markup, parse_mode='Markdown')
     return LOGIN_CONTACT
 
 async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -276,12 +258,10 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         user = db_data.get_user_by_login(contact_processed)
         context.user_data['login_user'] = user
-        keyboard = [get_back_button(LOGIN_CONTACT)]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Введите ваш **пароль**:", reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text("Введите ваш **пароль**:", parse_mode='Markdown')
         return LOGIN_PASSWORD
     except db_data.NotFoundError:
-        await update.message.reply_text("Пользователь не найден. Попробуйте еще раз или /start для регистрации.")
+        await update.message.reply_text("Пользователь не найден. Попробуйте еще раз.")
         return LOGIN_CONTACT
 
 async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -303,9 +283,7 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
 async def start_forgot_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    keyboard = [get_back_button(LOGIN_CONTACT)]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Введите ваш **юзернейм** или **контакт** для сброса пароля:", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("Введите ваш **юзернейм** или **контакт** для сброса пароля:", parse_mode='Markdown')
     return FORGOT_PASSWORD_CONTACT
 
 async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -320,10 +298,10 @@ async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFA
     user_telegram_id = user['telegram_id'] if user['telegram_id'] else update.effective_user.id
     code = str(random.randint(100000, 999999))
     context.user_data['forgot_password_code'] = code
-    context.user_data['forgot_password_contact'] = contact_to_verify
+    context.user_data['forgot_password_contact'] = user['contact_info'] # Используем основной контакт
     sent = await send_verification_message(contact_to_verify, code, context, user_telegram_id)
     if sent:
-        await update.message.reply_text(f"Код верификации отправлен на ваш контакт ({contact_to_verify}). Введите его:")
+        await update.message.reply_text(f"Код верификации отправлен на {contact_to_verify}. Введите его:")
         return FORGOT_PASSWORD_VERIFY_CODE
     else:
         await update.message.reply_text("Не удалось отправить код верификации.")
@@ -343,10 +321,10 @@ async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     hidden_password_text = "•" * len(new_password)
     await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
     if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", new_password):
-        await update.message.reply_text("❌ Новый пароль не соответствует требованиям безопасности. Попробуйте снова.")
+        await update.message.reply_text("❌ Пароль не соответствует требованиям. Попробуйте снова.")
         return FORGOT_PASSWORD_SET_NEW
     context.user_data['forgot_password_temp'] = new_password
-    await update.message.reply_text("Пожалуйста, **введите новый пароль еще раз** для подтверждения:", parse_mode='Markdown')
+    await update.message.reply_text("Пожалуйста, **введите новый пароль еще раз**:", parse_mode='Markdown')
     return FORGOT_PASSWORD_CONFIRM_NEW
 
 async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -363,7 +341,7 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти.")
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля: {e}")
-        await update.message.reply_text("❌ Ошибка при обновлении пароля. Попробуйте снова.")
+        await update.message.reply_text("❌ Ошибка при обновлении пароля.")
         return FORGOT_PASSWORD_SET_NEW
     context.user_data.clear()
     return await start(update, context)
@@ -377,7 +355,7 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     borrowed_books = db_data.get_borrowed_books(user['id'])
     borrow_limit = get_user_borrow_limit(user['status'])
     message_text = (
-        f"**Личный кабинет: {user['full_name']} ({user['status'].capitalize()})**\n"
+        f"**Личный кабинет: {user['full_name']}**\n"
         f"📚 Взято книг: {len(borrowed_books)}/{borrow_limit}"
     )
     keyboard = [
@@ -398,9 +376,9 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = context.user_data.get('current_user')
     db_data.log_activity(user_id=user['id'], action="logout")
     if db_data.get_borrowed_books(user['id']):
-        keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Вы не можете выйти, пока не вернете все взятые книги!", reply_markup=reply_markup)
+        await query.edit_message_text("Вы не можете выйти, пока у вас есть книги на руках!", reply_markup=reply_markup)
         return USER_MENU
     else:
         context.user_data.clear()
@@ -408,6 +386,7 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает стилизованный профиль пользователя."""
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
@@ -443,6 +422,7 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return USER_MENU
 
 async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает историю заимствований пользователя."""
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
@@ -473,13 +453,11 @@ async def start_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     borrowed_books = db_data.get_borrowed_books(user['id'])
     borrow_limit = get_user_borrow_limit(user['status'])
     if len(borrowed_books) >= borrow_limit:
-        keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на заимствование книг.", reply_markup=reply_markup)
         return USER_MENU
-    keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Введите **название книги** или **имя автора**:", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("Введите **название книги** или **имя автора** для поиска:", parse_mode='Markdown')
     return USER_BORROW_BOOK_NAME
 
 async def process_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -516,7 +494,7 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на заимствование.")
                 return await user_menu(update, context)
             db_data.borrow_book(user_id, selected_book['id'])
-            db_data.log_activity(user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}, Name: {selected_book['name']}")
+            db_data.log_activity(user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}")
             await query.edit_message_text(f"✅ Книга '{selected_book['name']}' успешно взята.")
             return await user_menu(update, context)
         else:
@@ -528,7 +506,7 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text(f"Книга '{selected_book['name']}' временно отсутствует. Хотите зарезервировать?", reply_markup=reply_markup)
             return USER_RESERVE_BOOK_CONFIRM
-    except db_data.NotFoundError:
+    except (db_data.NotFoundError, IndexError):
         await query.edit_message_text("❌ Ошибка: книга не найдена.")
         return await user_menu(update, context)
     except Exception as e:
@@ -545,7 +523,7 @@ async def process_reservation_decision(update: Update, context: ContextTypes.DEF
     user_id = context.user_data['current_user']['id']
     if query.data == 'reserve_yes':
         result = db_data.add_reservation(user_id, book_to_reserve['id'])
-        db_data.log_activity(user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}, Name: {book_to_reserve['name']}")
+        db_data.log_activity(user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}")
         await query.edit_message_text(f"✅ {result}")
     else:
         await query.edit_message_text("Действие отменено.")
@@ -558,7 +536,7 @@ async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     user_id = context.user_data['current_user']['id']
     borrowed_books = db_data.get_borrowed_books(user_id)
     if not borrowed_books:
-        keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("У вас нет взятых книг.", reply_markup=reply_markup)
         return USER_MENU
@@ -569,7 +547,7 @@ async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         borrow_id_cb = f"return_{i}"
         keyboard.append([InlineKeyboardButton(f"{i+1}. {borrowed['book_name']}", callback_data=borrow_id_cb)])
         context.user_data['borrowed_map'][borrow_id_cb] = {'borrow_id': borrowed['borrow_id'], 'book_id': borrowed['book_id'], 'book_name': borrowed['book_name']}
-    keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="user_menu")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(message_text, reply_markup=reply_markup)
     return USER_RETURN_BOOK
@@ -587,7 +565,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         result = db_data.return_book(borrowed_info['borrow_id'], book_id)
         if result == "Успешно":
-            db_data.log_activity(user_id=user_id, action="return_book", details=f"Book ID: {book_id}, Name: {book_name}")
+            db_data.log_activity(user_id=user_id, action="return_book", details=f"Book ID: {book_id}")
             context.user_data.pop('borrowed_map', None)
             context.user_data['just_returned_book'] = {'id': book_id, 'name': book_name}
             keyboard = [
@@ -627,9 +605,9 @@ async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = context.user_data['current_user']['id']
     history = db_data.get_user_borrow_history(user_id)
     if not history:
-        keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
+        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Вы можете оценить только книги, которые брали.", reply_markup=reply_markup)
+        await query.edit_message_text("Вы можете оценить только те книги, которые брали.", reply_markup=reply_markup)
         return USER_MENU
     message_text = "Выберите книгу для оценки:"
     keyboard = []
@@ -639,23 +617,22 @@ async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         rate_id = f"rate_{i}"
         keyboard.append([InlineKeyboardButton(f"{i+1}. {book['book_name']}", callback_data=rate_id)])
         context.user_data['rating_map'][rate_id] = {'book_id': book['book_id'], 'book_name': book['book_name']}
-    keyboard.append([InlineKeyboardButton("Назад в меню", callback_data="user_menu")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(message_text, reply_markup=reply_markup)
     return USER_RATE_BOOK_SELECT
 
 async def select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, from_return: bool = False) -> int:
     query = update.callback_query
+    await query.answer()
     if not from_return:
         book_info = context.user_data['rating_map'].get(query.data)
         if not book_info:
-            await query.answer()
             await query.edit_message_text("Ошибка выбора.")
             return await user_menu(update, context)
         context.user_data['book_to_rate'] = book_info
     else:
         book_info = context.user_data.get('book_to_rate')
-    await query.answer()
     message_text = f"Ваша оценка для книги **'{book_info['book_name']}'** от 1 до 5:"
     rating_buttons = [
         [InlineKeyboardButton(str(i), callback_data=f"rating_{i}") for i in range(1, 6)],
@@ -687,33 +664,25 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return await user_menu(update, context)
 
 async def show_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Показывает последние уведомления пользователя."""
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-
     try:
         notifications = db_data.get_notifications_for_user(user_id)
-        
         message_parts = ["📬 **Ваши последние уведомления:**\n"]
         for notif in notifications:
             date_str = notif['created_at'].strftime('%d.%m.%Y %H:%M')
-            status = "⚪️" if notif['is_read'] else "🔵" # Новое/прочитанное
+            status = "⚪️" if notif['is_read'] else "🔵"
             category_map = {'broadcast': 'Рассылка', 'reservation': 'Резерв', 'system': 'Система'}
             category_str = category_map.get(notif['category'], notif['category'].capitalize())
-            
             message_parts.append(f"`{date_str}`\n{status} **[{category_str}]** {notif['text']}\n")
-
         message_text = "\n".join(message_parts)
-
     except db_data.NotFoundError:
         message_text = "📬 У вас пока нет уведомлений."
-    
     keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-    return USER_MENU # Остаемся в главном меню
+    return USER_MENU
 
 # --- ФУНКЦИИ УДАЛЕНИЯ АККАУНТА ---
 
@@ -765,7 +734,7 @@ def main() -> None:
             REGISTER_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
             REGISTER_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
             REGISTER_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_registration_code)],
-            REGISTER_STATUS: [CallbackQueryHandler(get_status, pattern="^(студент|учитель)$")],
+            REGISTER_STATUS: [CallbackQueryHandler(get_status, pattern=r"^(студент|учитель)$")],
             REGISTER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
             REGISTER_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
             REGISTER_CONFIRM_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password_confirmation)],
@@ -794,12 +763,12 @@ def main() -> None:
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
             USER_BORROW_BOOK_SELECT: [
-                CallbackQueryHandler(process_borrow_selection, pattern="^borrow_book_"),
+                CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
-            USER_RESERVE_BOOK_CONFIRM: [CallbackQueryHandler(process_reservation_decision, pattern="^reserve_(yes|no)$")],
+            USER_RESERVE_BOOK_CONFIRM: [CallbackQueryHandler(process_reservation_decision, pattern=r"^reserve_(yes|no)$")],
             USER_RETURN_BOOK: [
-                CallbackQueryHandler(process_return_book, pattern="^return_\d+$"),
+                CallbackQueryHandler(process_return_book, pattern=r"^return_\d+$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
             USER_RATE_PROMPT_AFTER_RETURN: [
@@ -807,11 +776,11 @@ def main() -> None:
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
             USER_RATE_BOOK_SELECT: [
-                CallbackQueryHandler(select_rating, pattern="^rate_\d+$"),
+                CallbackQueryHandler(select_rating, pattern=r"^rate_\d+$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
             USER_RATE_BOOK_RATING: [
-                CallbackQueryHandler(process_rating, pattern="^rating_\d+$"),
+                CallbackQueryHandler(process_rating, pattern=r"^rating_\d+$"),
                 CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),
             ],
