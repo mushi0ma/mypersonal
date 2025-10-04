@@ -1,17 +1,17 @@
-version: '3.8'
-
 services:
   test_db:
     image: postgres:14-alpine
-    restart: always
+    # Используем переменные из .env.test для инициализации БД
+    env_file: .env.test
     environment:
-      POSTGRES_DB: ${TEST_DB_NAME}
-      POSTGRES_USER: ${TEST_DB_USER}
-      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD}
+      # Эти переменные обязательны для образа postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5434:5432"
     volumes:
-      - postgres_test_data:/var/lib/postgresql/data
+      - test_postgres_data:/var/lib/postgresql/data
 
 volumes:
-  postgres_test_data:
+  test_postgres_data:
