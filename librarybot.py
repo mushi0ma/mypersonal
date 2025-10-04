@@ -727,10 +727,18 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
+
+    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
+    
+    # Сначала получаем username, пока данные еще доступны
+    username = context.user_data['current_user'].get('username', f'ID: {user_id}')
+    
     with get_db_connection() as conn:
         result = db_data.delete_user_by_self(conn, user_id)
         if result == "Успешно":
-            db_data.log_activity(conn, user_id=user_id, action="self_delete_account")
+            # Теперь логируем действие С ДЕТАЛЯМИ (username)
+            db_data.log_activity(conn, user_id=user_id, action="self_delete_account", details=f"Username: {username}")
+            
             await query.edit_message_text("Ваш аккаунт был удален. Прощайте!")
             context.user_data.clear()
             return ConversationHandler.END
