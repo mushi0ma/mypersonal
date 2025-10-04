@@ -6,9 +6,6 @@ from psycopg2 import pool
 from dotenv import load_dotenv
 import contextlib
 
-# Загружаем переменные из .env файла
-load_dotenv()
-
 # --- Глобальный пул соединений (теперь он пустой при старте) ---
 db_pool = None
 
@@ -54,3 +51,11 @@ def get_db_connection():
 def hash_password(password: str) -> str:
     """Хеширует пароль для безопасного хранения."""
     return hashlib.sha256(password.encode()).hexdigest()
+
+def close_db_pool():
+    """Closes all connections in the pool and sets the pool to None."""
+    global db_pool
+    if db_pool:
+        db_pool.closeall()
+        db_pool = None
+        print("ℹ️ Пул соединений с базой данных закрыт.")
