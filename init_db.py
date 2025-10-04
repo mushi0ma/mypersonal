@@ -6,6 +6,7 @@ from db_utils import get_db_connection
 def initialize_database():
     """Создает все необходимые таблицы, если они не существуют."""
     commands = (
+        # --- СТАРЫЕ ТАБЛИЦЫ (с последними изменениями) ---
         """
         CREATE TABLE IF NOT EXISTS authors (
             id SERIAL PRIMARY KEY,
@@ -24,7 +25,7 @@ def initialize_database():
         """
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
-            username VARCHAR(50) UNIQUE NOT NULL, -- <<-- ДОБАВЛЕНО
+            username VARCHAR(50) UNIQUE NOT NULL,
             telegram_id BIGINT UNIQUE,
             telegram_username VARCHAR(255) UNIQUE,
             full_name VARCHAR(255) NOT NULL,
@@ -38,7 +39,7 @@ def initialize_database():
         """
         CREATE TABLE IF NOT EXISTS borrowed_books (
             borrow_id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id),
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             book_id INTEGER REFERENCES books(id),
             borrow_date DATE NOT NULL DEFAULT CURRENT_DATE,
             due_date DATE NOT NULL,
@@ -48,7 +49,7 @@ def initialize_database():
         """
         CREATE TABLE IF NOT EXISTS reservations (
             reservation_id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id),
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
             book_id INTEGER REFERENCES books(id),
             reservation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             notified BOOLEAN DEFAULT FALSE,
@@ -58,10 +59,31 @@ def initialize_database():
         """
         CREATE TABLE IF NOT EXISTS ratings (
             rating_id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id),
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
             book_id INTEGER REFERENCES books(id),
             rating INTEGER CHECK (rating >= 1 AND rating <= 5),
             UNIQUE(user_id, book_id)
+        );
+        """,
+        # --- НОВАЯ ТАБЛИЦА ДЛЯ УВЕДОМЛЕНИЙ ---
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            category VARCHAR(50) NOT NULL, -- 'broadcast', 'reservation', 'due_date', 'system'
+            is_read BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        # --- НОВАЯ ТАБЛИЦА ДЛЯ ИСТОРИИ ДЕЙСТВИЙ ---
+        """
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            action VARCHAR(100) NOT NULL, -- 'login', 'logout', 'borrow_book', etc.
+            details TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
     )
@@ -76,66 +98,45 @@ def initialize_database():
     except (psycopg2.Error, ConnectionError) as e:
         print(f"❌ Ошибка при инициализации схемы базы данных: {e}")
 
+# ... (функция seed_data остается без изменений) ...
 def seed_data():
     """Заполняет таблицы авторов и книг начальными данными."""
     authors_to_add = [
-        "Михаил Булгаков",
-        "Федор Достоевский",
-        "Лев Толстой",
-        "Антон Чехов",
-        "Александр Пушкин"
+        "Михаил Булгаков", "Федор Достоевский", "Лев Толстой",
+        "Антон Чехов", "Александр Пушкин"
     ]
-    
-    # Структура: (Название, Имя автора, Общее количество)
     books_to_add = [
-        ("Мастер и Маргарита", "Михаил Булгаков", 5),
-        ("Собачье сердце", "Михаил Булгаков", 3),
-        ("Преступление и наказание", "Федор Достоевский", 4),
-        ("Идиот", "Федор Достоевский", 2),
-        ("Война и мир", "Лев Толстой", 3),
-        ("Анна Каренина", "Лев Толстой", 4),
-        ("Вишневый сад", "Антон Чехов", 6),
-        ("Капитанская дочка", "Александр Пушкин", 5)
+        ("Мастер и Маргарита", "Михаил Булгаков", 5), ("Собачье сердце", "Михаил Булгаков", 3),
+        ("Преступление и наказание", "Федор Достоевский", 4), ("Идиот", "Федор Достоевский", 2),
+        ("Война и мир", "Лев Толстой", 3), ("Анна Каренина", "Лев Толстой", 4),
+        ("Вишневый сад", "Антон Чехов", 6), ("Капитанская дочка", "Александр Пушкин", 5)
     ]
-
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
                 author_ids = {}
-                # Добавляем авторов и получаем их ID
                 for author_name in authors_to_add:
-                    # ON CONFLICT DO NOTHING - чтобы не было ошибки при повторном запуске
                     cur.execute(
-                        "INSERT INTO authors (name) VALUES (%s) ON CONFLICT (name) DO NOTHING RETURNING id, name",
-                        (author_name,)
+                        "INSERT INTO authors (name) VALUES (%s) ON CONFLICT (name) DO NOTHING RETURNING id, name", (author_name,)
                     )
                     row = cur.fetchone()
-                    if row:
-                        author_ids[row[1]] = row[0]
-
-                # Если ID не были добавлены, получаем существующие
+                    if row: author_ids[row[1]] = row[0]
                 if not author_ids:
                     cur.execute("SELECT id, name FROM authors")
-                    for row in cur.fetchall():
-                        author_ids[row[1]] = row[0]
-
-                # Добавляем книги
+                    for row in cur.fetchall(): author_ids[row[1]] = row[0]
                 for book_title, author_name, quantity in books_to_add:
                     author_id = author_ids.get(author_name)
                     if author_id:
                         cur.execute(
                             """
                             INSERT INTO books (name, author_id, total_quantity, available_quantity)
-                            VALUES (%s, %s, %s, %s)
-                            ON CONFLICT (name) DO NOTHING
-                            """,
-                            (book_title, author_id, quantity, quantity)
+                            VALUES (%s, %s, %s, %s) ON CONFLICT (name) DO NOTHING
+                            """, (book_title, author_id, quantity, quantity)
                         )
             conn.commit()
-        print("✅ Таблицы авторов и книг успешно заполнены начальными данными.")
+        print("✅ Таблицы авторов и книг успешно заполнены.")
     except (psycopg2.Error, ConnectionError) as e:
         print(f"❌ Ошибка при заполнении таблиц: {e}")
-
 
 if __name__ == '__main__':
     print("--- Шаг 1: Инициализация схемы базы данных ---")
