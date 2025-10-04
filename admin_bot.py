@@ -25,7 +25,10 @@ from tasks import create_and_send_notification
 
 # --- Состояния для диалогов ---
 BROADCAST_MESSAGE = range(1)
-SELECTING_BOOK_FIELD, UPDATING_BOOK_FIELD = range(2)
+SELECTING_BOOK_FIELD, UPDATING_BOOK_FIELD = range(2, 4) # Смещаем диапазон
+# --- ДОБАВЬТЕ ЭТУ СТРОКУ ---
+GET_NAME, GET_AUTHOR, GET_GENRE, GET_DESCRIPTION, GET_COVER, CONFIRM_ADD = range(4, 10)
+
 # --- Ограничение доступа ---
 admin_filter = filters.User(user_id=ADMIN_TELEGRAM_ID)
 
@@ -264,7 +267,9 @@ async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             books, total_books = db_data.get_all_books_paginated(conn, limit=books_per_page, offset=offset)
 
         message_text = f"📚 **Всего книг в каталоге: {total_books}**\n\nСтраница {page + 1}:"
-        keyboard = []
+        keyboard = [
+            [InlineKeyboardButton("➕ Добавить книгу", callback_data="admin_add_book_start")]
+        ]
         for book in books:
             status_icon = "🔴" if book['is_borrowed'] else "🟢"
             button_text = f"{status_icon} {book['name']}"
@@ -467,12 +472,152 @@ async def process_book_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
     query.data = f"books_page_{current_page}"
     await show_books_list(update, context)
 
+# --- Функции для диалога добавления книги ---
+
+async def add_book_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает диалог добавления новой книги."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "Начинаем добавление новой книги.\n\n"
+        "**Шаг 1/5: Введите название книги.**\n\n"
+        "Для отмены введите /cancel."
+    , parse_mode='Markdown')
+    return GET_NAME
+
+async def get_book_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает название книги и запрашивает автора."""
+    context.user_data['new_book'] = {'name': update.message.text}
+    await update.message.reply_text(
+        "**Шаг 2/5: Введите автора книги.**",
+        parse_mode='Markdown'
+    )
+    return GET_AUTHOR
+
+async def get_book_author(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает автора и запрашивает жанр."""
+    context.user_data['new_book']['author'] = update.message.text
+    await update.message.reply_text(
+        "**Шаг 3/5: Введите жанр книги.**",
+        parse_mode='Markdown'
+    )
+    return GET_GENRE
+
+async def get_book_genre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает жанр и запрашивает описание."""
+    context.user_data['new_book']['genre'] = update.message.text
+    await update.message.reply_text(
+        "**Шаг 4/5: Введите краткое описание книги.**",
+        parse_mode='Markdown'
+    )
+    return GET_DESCRIPTION
+
+async def get_book_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает описание и запрашивает обложку."""
+    context.user_data['new_book']['description'] = update.message.text
+    await update.message.reply_text(
+        "**Шаг 5/5: Отправьте фото обложки.**\n\n"
+        "Если хотите пропустить этот шаг, отправьте любой текст (например, 'пропустить')."
+    , parse_mode='Markdown')
+    return GET_COVER
+
+async def get_book_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает фото обложки и переходит к подтверждению."""
+    context.user_data['new_book']['cover_image_id'] = update.message.photo[-1].file_id
+    await show_add_confirmation(update, context)
+    return CONFIRM_ADD
+
+async def skip_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Пропускает шаг добавления обложки."""
+    context.user_data['new_book']['cover_image_id'] = None
+    await update.message.reply_text("Обложка пропущена.")
+    await show_add_confirmation(update, context)
+    return CONFIRM_ADD
+
+async def show_add_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает собранные данные для финального подтверждения."""
+    book_data = context.user_data['new_book']
+    
+    message_parts = [
+        "**Проверьте данные перед сохранением:**\n",
+        f"**Название:** {book_data['name']}",
+        f"**Автор:** {book_data['author']}",
+        f"**Жанр:** {book_data['genre']}",
+        f"**Описание:** {book_data['description']}"
+    ]
+    message_text = "\n".join(message_parts)
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Сохранить", callback_data="add_book_save"),
+            InlineKeyboardButton("❌ Отмена", callback_data="add_book_cancel")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if book_data.get('cover_image_id'):
+        await update.message.reply_photo(
+            photo=book_data['cover_image_id'],
+            caption=message_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            text=message_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+async def add_book_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Сохраняет новую книгу в БД."""
+    query = update.callback_query
+    await query.answer()
+    book_data = context.user_data.pop('new_book', None)
+
+    try:
+        with get_db_connection() as conn:
+            db_data.add_new_book(conn, book_data)
+        await query.edit_message_caption(caption="✅ Новая книга успешно добавлена в каталог!", reply_markup=None)
+    except Exception as e:
+        await query.edit_message_caption(caption=f"❌ Ошибка при сохранении книги: {e}", reply_markup=None)
+    
+    return ConversationHandler.END
+
+async def add_book_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отменяет процесс добавления книги."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop('new_book', None)
+    await query.edit_message_caption(caption="Добавление книги отменено.", reply_markup=None)
+    return ConversationHandler.END
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
 
 def main() -> None:
     application = Application.builder().token(ADMIN_BOT_TOKEN).build()
+
+    add_book_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_book_start, pattern="^admin_add_book_start$")],
+        states={
+            GET_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_book_name)],
+            GET_AUTHOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_book_author)],
+            GET_GENRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_book_genre)],
+            GET_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_book_description)],
+            GET_COVER: [
+                MessageHandler(filters.PHOTO, get_book_cover),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, skip_cover)
+            ],
+            CONFIRM_ADD: [
+                CallbackQueryHandler(add_book_save, pattern="^add_book_save$"),
+                CallbackQueryHandler(add_book_cancel, pattern="^add_book_cancel$")
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    application.add_handler(add_book_handler)
 
     edit_book_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_book_edit, pattern="^admin_edit_book_")],

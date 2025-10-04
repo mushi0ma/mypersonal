@@ -476,3 +476,15 @@ def delete_book(conn, book_id: int):
         # Теперь удаляем саму книгу
         cur.execute("DELETE FROM books WHERE id = %s", (book_id,))
     return True
+
+def add_new_book(conn, book_data: dict):
+    """Добавляет новую книгу в базу данных."""
+    sql = """
+        INSERT INTO books (name, author, genre, description, cover_image_id)
+        VALUES (%(name)s, %(author)s, %(genre)s, %(description)s, %(cover_image_id)s)
+        RETURNING id;
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, book_data)
+        new_book_id = cur.fetchone()[0]
+    return new_book_id
