@@ -44,14 +44,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     LOGIN_CONTACT, LOGIN_PASSWORD,
     FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE,
     FORGOT_PASSWORD_SET_NEW, FORGOT_PASSWORD_CONFIRM_NEW,
-    USER_MENU, USER_BORROW_BOOK_NAME, USER_BORROW_BOOK_SELECT,
+    USER_MENU, USER_BORROW_BOOK_SELECT,
     USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN,
     USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING, USER_DELETE_CONFIRM,
     USER_RESERVE_BOOK_CONFIRM,
     USER_VIEW_HISTORY, USER_NOTIFICATIONS,
     SHOWING_GENRES, SHOWING_GENRE_BOOKS,
     GETTING_SEARCH_QUERY, SHOWING_SEARCH_RESULTS
-) = range(30)
+) = range(29)
 
 
 # --------------------------
@@ -470,42 +470,6 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     return USER_MENU
 
 # --- ФУНКЦИИ РАБОТЫ С КНИГАМИ ---
-
-async def start_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    user = context.user_data.get('current_user')
-    with get_db_connection() as conn:
-        borrowed_books = db_data.get_borrowed_books(conn, user['id'])
-    borrow_limit = get_user_borrow_limit(user['status'])
-    if len(borrowed_books) >= borrow_limit:
-        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на заимствование книг.", reply_markup=reply_markup)
-        return USER_MENU
-    await query.edit_message_text("Введите **название книги** или **имя автора** для поиска:", parse_mode='Markdown')
-    return USER_BORROW_BOOK_NAME
-
-async def process_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    book_query = update.message.text
-    try:
-        with get_db_connection() as conn:
-            found_books = db_data.get_book_by_name(conn, book_query)
-        message_text = "Вот что удалось найти. Выберите книгу:"
-        keyboard = []
-        for book in found_books:
-            button_text = f"{book['name']} ({book['author_name']}) - доступно: {book['available_quantity']}"
-            callback_data = f"borrow_book_{book['id']}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-        keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
-        return USER_BORROW_BOOK_SELECT
-    except db_data.NotFoundError as e:
-        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(f"{e} Попробуйте еще раз.", reply_markup=reply_markup)
-        return USER_BORROW_BOOK_NAME
 
 async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -935,7 +899,6 @@ def main() -> None:
             FORGOT_PASSWORD_SET_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_new_password)],
             FORGOT_PASSWORD_CONFIRM_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_new_password)],
             USER_MENU: [
-                CallbackQueryHandler(start_borrow_book, pattern="^user_borrow$"),
                 CallbackQueryHandler(start_return_book, pattern="^user_return$"),
                 CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
                 CallbackQueryHandler(view_profile, pattern="^user_profile$"),
@@ -946,10 +909,6 @@ def main() -> None:
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),
                 CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
                 CallbackQueryHandler(start_search, pattern="^search_book$"),
-            ],
-            USER_BORROW_BOOK_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_borrow_book),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
             USER_BORROW_BOOK_SELECT: [
                 CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
