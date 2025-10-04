@@ -18,7 +18,7 @@ from telegram.ext import (
 
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import db_data
-from db_utils import hash_password
+from db_utils import get_db_connection, hash_password
 from tasks import create_and_send_notification, send_telegram_message
 
 # --- ИМПОРТ СЕРВИСОВ ---
@@ -154,9 +154,10 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     contact_input = update.message.text
     contact_processed = normalize_phone_number(contact_input)
     try:
-        if db_data.get_user_by_login(contact_processed):
-            await update.message.reply_text("Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.")
-            return REGISTER_CONTACT
+        with get_db_connection() as conn:
+            if db_data.get_user_by_login(conn, contact_processed):
+                await update.message.reply_text("Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.")
+                return REGISTER_CONTACT
     except db_data.NotFoundError:
         pass
     context.user_data['registration']['contact_info'] = contact_processed
@@ -231,8 +232,9 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
     context.user_data['registration']['telegram_id'] = user_info.id
     context.user_data['registration']['telegram_username'] = user_info.username if user_info.username else None
     try:
-        user_id = db_data.add_user(context.user_data['registration'])
-        db_data.log_activity(user_id=user_id, action="registration")
+        with get_db_connection() as conn:
+            user_id = db_data.add_user(conn, context.user_data['registration'])
+            db_data.log_activity(conn, user_id=user_id, action="registration")
         await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти.")
     except db_data.UserExistsError:
         await update.message.reply_text("❌ Ошибка: этот юзернейм или контакт уже заняты.")
@@ -256,7 +258,8 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     contact_input = update.message.text
     contact_processed = normalize_phone_number(contact_input)
     try:
-        user = db_data.get_user_by_login(contact_processed)
+        with get_db_connection() as conn:
+            user = db_data.get_user_by_login(conn, contact_processed)
         context.user_data['login_user'] = user
         await update.message.reply_text("Введите ваш **пароль**:", parse_mode='Markdown')
         return LOGIN_PASSWORD
@@ -269,7 +272,8 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
     stored_hash = user['password_hash']
     input_password = update.message.text
     if hash_password(input_password) == stored_hash:
-        db_data.log_activity(user_id=user['id'], action="login")
+        with get_db_connection() as conn:
+            db_data.log_activity(conn, user_id=user['id'], action="login")
         await update.message.reply_text(f"🎉 Добро пожаловать, {user['full_name']}!")
         context.user_data['current_user'] = user
         context.user_data.pop('login_user')
@@ -290,7 +294,8 @@ async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFA
     contact_input = update.message.text
     contact_processed = normalize_phone_number(contact_input)
     try:
-        user = db_data.get_user_by_login(contact_processed)
+        with get_db_connection() as conn:
+            user = db_data.get_user_by_login(conn, contact_processed)
     except db_data.NotFoundError:
         await update.message.reply_text("Пользователь с такими данными не найден.")
         return FORGOT_PASSWORD_CONTACT
@@ -337,7 +342,8 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
     login_query = context.user_data['forgot_password_contact']
     final_password = context.user_data.pop('forgot_password_temp')
     try:
-        db_data.update_user_password(login_query, final_password)
+        with get_db_connection() as conn:
+            db_data.update_user_password(conn, login_query, final_password)
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти.")
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля: {e}")
@@ -352,7 +358,8 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = context.user_data.get('current_user')
     if not user:
         return await start(update, context)
-    borrowed_books = db_data.get_borrowed_books(user['id'])
+    with get_db_connection() as conn:
+        borrowed_books = db_data.get_borrowed_books(conn, user['id'])
     borrow_limit = get_user_borrow_limit(user['status'])
     message_text = (
         f"**Личный кабинет: {user['full_name']}**\n"
@@ -374,16 +381,16 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     user = context.user_data.get('current_user')
-    db_data.log_activity(user_id=user['id'], action="logout")
-    if db_data.get_borrowed_books(user['id']):
-        keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Вы не можете выйти, пока у вас есть книги на руках!", reply_markup=reply_markup)
-        return USER_MENU
-    else:
-        context.user_data.clear()
-        await query.edit_message_text("Вы успешно вышли. Введите /start для входа.")
-        return ConversationHandler.END
+    with get_db_connection() as conn:
+        db_data.log_activity(conn, user_id=user['id'], action="logout")
+        if db_data.get_borrowed_books(conn, user['id']):
+            keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("Вы не можете выйти, пока у вас есть книги на руках!", reply_markup=reply_markup)
+            return USER_MENU
+    context.user_data.clear()
+    await query.edit_message_text("Вы успешно вышли. Введите /start для входа.")
+    return ConversationHandler.END
 
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Показывает стилизованный профиль пользователя."""
@@ -391,8 +398,9 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     await query.answer()
     user_id = context.user_data['current_user']['id']
     try:
-        user_profile = db_data.get_user_profile(user_id)
-        borrowed_books = db_data.get_borrowed_books(user_id)
+        with get_db_connection() as conn:
+            user_profile = db_data.get_user_profile(conn, user_id)
+            borrowed_books = db_data.get_borrowed_books(conn, user_id)
         borrow_limit = get_user_borrow_limit(user_profile['status'])
         reg_date_str = user_profile['registration_date'].strftime('%d.%m.%Y')
         message_parts = [
@@ -426,7 +434,8 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    history = db_data.get_user_borrow_history(user_id)
+    with get_db_connection() as conn:
+        history = db_data.get_user_borrow_history(conn, user_id)
     message_parts = ["**📜 Ваша история взятых книг 📜**\n"]
     if history:
         for item in history:
@@ -450,7 +459,8 @@ async def start_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     await query.answer()
     user = context.user_data.get('current_user')
-    borrowed_books = db_data.get_borrowed_books(user['id'])
+    with get_db_connection() as conn:
+        borrowed_books = db_data.get_borrowed_books(conn, user['id'])
     borrow_limit = get_user_borrow_limit(user['status'])
     if len(borrowed_books) >= borrow_limit:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
@@ -463,7 +473,8 @@ async def start_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def process_borrow_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     book_query = update.message.text
     try:
-        found_books = db_data.get_book_by_name(book_query)
+        with get_db_connection() as conn:
+            found_books = db_data.get_book_by_name(conn, book_query)
         message_text = "Вот что удалось найти. Выберите книгу:"
         keyboard = []
         for book in found_books:
@@ -486,26 +497,27 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
     book_id = int(query.data.split('_')[2])
     user_id = context.user_data['current_user']['id']
     try:
-        selected_book = db_data.get_book_by_id(book_id)
-        if selected_book['available_quantity'] > 0:
-            borrowed_books = db_data.get_borrowed_books(user_id)
-            borrow_limit = get_user_borrow_limit(context.user_data['current_user']['status'])
-            if len(borrowed_books) >= borrow_limit:
-                await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на заимствование.")
+        with get_db_connection() as conn:
+            selected_book = db_data.get_book_by_id(conn, book_id)
+            if selected_book['available_quantity'] > 0:
+                borrowed_books = db_data.get_borrowed_books(conn, user_id)
+                borrow_limit = get_user_borrow_limit(context.user_data['current_user']['status'])
+                if len(borrowed_books) >= borrow_limit:
+                    await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на заимствование.")
+                    return await user_menu(update, context)
+                db_data.borrow_book(conn, user_id, selected_book['id'])
+                db_data.log_activity(conn, user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}")
+                await query.edit_message_text(f"✅ Книга '{selected_book['name']}' успешно взята.")
                 return await user_menu(update, context)
-            db_data.borrow_book(user_id, selected_book['id'])
-            db_data.log_activity(user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}")
-            await query.edit_message_text(f"✅ Книга '{selected_book['name']}' успешно взята.")
-            return await user_menu(update, context)
-        else:
-            context.user_data['book_to_reserve'] = selected_book
-            keyboard = [
-                [InlineKeyboardButton("Да, уведомить меня", callback_data="reserve_yes")],
-                [InlineKeyboardButton("Нет, спасибо", callback_data="reserve_no")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(f"Книга '{selected_book['name']}' временно отсутствует. Хотите зарезервировать?", reply_markup=reply_markup)
-            return USER_RESERVE_BOOK_CONFIRM
+            else:
+                context.user_data['book_to_reserve'] = selected_book
+                keyboard = [
+                    [InlineKeyboardButton("Да, уведомить меня", callback_data="reserve_yes")],
+                    [InlineKeyboardButton("Нет, спасибо", callback_data="reserve_no")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(f"Книга '{selected_book['name']}' временно отсутствует. Хотите зарезервировать?", reply_markup=reply_markup)
+                return USER_RESERVE_BOOK_CONFIRM
     except (db_data.NotFoundError, IndexError):
         await query.edit_message_text("❌ Ошибка: книга не найдена.")
         return await user_menu(update, context)
@@ -522,8 +534,9 @@ async def process_reservation_decision(update: Update, context: ContextTypes.DEF
         return await user_menu(update, context)
     user_id = context.user_data['current_user']['id']
     if query.data == 'reserve_yes':
-        result = db_data.add_reservation(user_id, book_to_reserve['id'])
-        db_data.log_activity(user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}")
+        with get_db_connection() as conn:
+            result = db_data.add_reservation(conn, user_id, book_to_reserve['id'])
+            db_data.log_activity(conn, user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}")
         await query.edit_message_text(f"✅ {result}")
     else:
         await query.edit_message_text("Действие отменено.")
@@ -534,7 +547,8 @@ async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    borrowed_books = db_data.get_borrowed_books(user_id)
+    with get_db_connection() as conn:
+        borrowed_books = db_data.get_borrowed_books(conn, user_id)
     if not borrowed_books:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -563,27 +577,28 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
     book_name = borrowed_info['book_name']
     user_id = context.user_data['current_user']['id']
     try:
-        result = db_data.return_book(borrowed_info['borrow_id'], book_id)
-        if result == "Успешно":
-            db_data.log_activity(user_id=user_id, action="return_book", details=f"Book ID: {book_id}")
-            context.user_data.pop('borrowed_map', None)
-            context.user_data['just_returned_book'] = {'id': book_id, 'name': book_name}
-            keyboard = [
-                [InlineKeyboardButton("⭐ Оценить книгу", callback_data="rate_after_return")],
-                [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(f"✅ Книга '{book_name}' возвращена. Хотите оценить?", reply_markup=reply_markup)
-            reservations = db_data.get_reservations_for_book(book_id)
-            if reservations:
-                user_to_notify_id = reservations[0]
-                notification_text = f"🎉 Книга '{book_name}', которую вы резервировали, снова в наличии."
-                create_and_send_notification.delay(user_id=user_to_notify_id, text=notification_text, category='reservation')
-                db_data.update_reservation_status(user_to_notify_id, book_id, notified=True)
-            return USER_RATE_PROMPT_AFTER_RETURN
-        else:
-            await query.edit_message_text(f"❌ Не удалось вернуть: {result}")
-            return await user_menu(update, context)
+        with get_db_connection() as conn:
+            result = db_data.return_book(conn, borrowed_info['borrow_id'], book_id)
+            if result == "Успешно":
+                db_data.log_activity(conn, user_id=user_id, action="return_book", details=f"Book ID: {book_id}")
+                context.user_data.pop('borrowed_map', None)
+                context.user_data['just_returned_book'] = {'id': book_id, 'name': book_name}
+                keyboard = [
+                    [InlineKeyboardButton("⭐ Оценить книгу", callback_data="rate_after_return")],
+                    [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(f"✅ Книга '{book_name}' возвращена. Хотите оценить?", reply_markup=reply_markup)
+                reservations = db_data.get_reservations_for_book(conn, book_id)
+                if reservations:
+                    user_to_notify_id = reservations[0]
+                    notification_text = f"🎉 Книга '{book_name}', которую вы резервировали, снова в наличии."
+                    create_and_send_notification.delay(user_id=user_to_notify_id, text=notification_text, category='reservation')
+                    db_data.update_reservation_status(conn, user_to_notify_id, book_id, notified=True)
+                return USER_RATE_PROMPT_AFTER_RETURN
+            else:
+                await query.edit_message_text(f"❌ Не удалось вернуть: {result}")
+                return await user_menu(update, context)
     except Exception as e:
         logger.error(f"Ошибка при возврате книги: {e}")
         await query.edit_message_text("❌ Непредвиденная ошибка.")
@@ -596,14 +611,15 @@ async def initiate_rating_from_return(update: Update, context: ContextTypes.DEFA
     if not returned_book:
         await query.edit_message_text("Ошибка. Информация о книге потеряна.")
         return await user_menu(update, context)
-    context.user_data['book_to_rate'] = {'book_id': returned_book['id'], 'book_name': returned_book['name']}
+    context.user_data['book_to_rate'] = {'id': returned_book['id'], 'name': returned_book['name']}
     return await select_rating(update, context, from_return=True)
 
 async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    history = db_data.get_user_borrow_history(user_id)
+    with get_db_connection() as conn:
+        history = db_data.get_user_borrow_history(conn, user_id)
     if not history:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -653,8 +669,9 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = context.user_data['current_user']['id']
     book_info = context.user_data['book_to_rate']
     try:
-        db_data.add_rating(user_id, book_info['book_id'], rating)
-        db_data.log_activity(user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
+        with get_db_connection() as conn:
+            db_data.add_rating(conn, user_id, book_info['book_id'], rating)
+            db_data.log_activity(conn, user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
         message_text = f"✅ Ваша оценка '{rating}' для '{book_info['book_name']}' сохранена."
     except Exception as e:
         message_text = f"❌ Не удалось сохранить: {e}"
@@ -668,7 +685,8 @@ async def show_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     user_id = context.user_data['current_user']['id']
     try:
-        notifications = db_data.get_notifications_for_user(user_id)
+        with get_db_connection() as conn:
+            notifications = db_data.get_notifications_for_user(conn, user_id)
         message_parts = ["📬 **Ваши последние уведомления:**\n"]
         for notif in notifications:
             date_str = notif['created_at'].strftime('%d.%m.%Y %H:%M')
@@ -690,7 +708,9 @@ async def ask_delete_self_confirmation(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    if db_data.get_borrowed_books(user_id):
+    with get_db_connection() as conn:
+        borrowed_books = db_data.get_borrowed_books(conn, user_id)
+    if borrowed_books:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в профиль", callback_data="user_profile")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("Вы не можете удалить аккаунт, пока у вас есть книги на руках.", reply_markup=reply_markup)
@@ -707,15 +727,16 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    result = db_data.delete_user_by_self(user_id)
-    if result == "Успешно":
-        db_data.log_activity(user_id=user_id, action="self_delete_account")
-        await query.edit_message_text("Ваш аккаунт был удален. Прощайте!")
-        context.user_data.clear()
-        return ConversationHandler.END
-    else:
-        await query.edit_message_text(f"Не удалось удалить: {result}")
-        return await user_menu(update, context)
+    with get_db_connection() as conn:
+        result = db_data.delete_user_by_self(conn, user_id)
+        if result == "Успешно":
+            db_data.log_activity(conn, user_id=user_id, action="self_delete_account")
+            await query.edit_message_text("Ваш аккаунт был удален. Прощайте!")
+            context.user_data.clear()
+            return ConversationHandler.END
+        else:
+            await query.edit_message_text(f"Не удалось удалить: {result}")
+            return await user_menu(update, context)
 
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---

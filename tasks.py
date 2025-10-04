@@ -4,7 +4,8 @@ from celery import Celery
 from celery.schedules import crontab
 from dotenv import load_dotenv
 import telegram
-import db_data # <-- Импортируем наш модуль для работы с БД
+import db_data
+from db_utils import get_db_connection # Импортируем функцию для получения соединения
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -35,11 +36,12 @@ def create_and_send_notification(user_id: int, text: str, category: str):
         return
 
     try:
-        # 1. Сохраняем уведомление в базу данных
-        db_data.create_notification(user_id=user_id, text=text, category=category)
-        
-        # 2. Получаем telegram_id для отправки
-        telegram_id = db_data.get_telegram_id_by_user_id(user_id)
+        with get_db_connection() as conn:
+            # 1. Сохраняем уведомление в базу данных
+            db_data.create_notification(conn, user_id=user_id, text=text, category=category)
+
+            # 2. Получаем telegram_id для отправки
+            telegram_id = db_data.get_telegram_id_by_user_id(conn, user_id)
         
         # 3. Отправляем сообщение
         notifier_bot.send_message(chat_id=telegram_id, text=text, parse_mode='Markdown')
@@ -48,7 +50,8 @@ def create_and_send_notification(user_id: int, text: str, category: str):
     except db_data.NotFoundError as e:
         print(f"❌ Error processing notification for user {user_id}: {e}")
     except telegram.error.TelegramError as e:
-        print(f"❌ Error sending notification to user {user_id} (telegram_id: {telegram_id}): {e}")
+        # Мы не можем получить telegram_id здесь, если он не был получен ранее
+        print(f"❌ Error sending notification to user {user_id}: {e}")
     except Exception as e:
         print(f"❌ An unexpected error occurred in create_and_send_notification: {e}")
 
@@ -59,7 +62,8 @@ def check_due_dates_and_notify():
     """Проверяет сроки сдачи книг и уведомляет должников."""
     print("Выполняется периодическая задача: проверка сроков сдачи книг...")
     # В будущем здесь будет логика, которая будет вызывать create_and_send_notification
-    # users = db_data.get_users_with_overdue_books()
+    # with get_db_connection() as conn:
+    #     users = db_data.get_users_with_overdue_books(conn)
     # for user in users:
     #     text = "Напоминание о сроке сдачи книги!"
     #     create_and_send_notification.delay(user['id'], text, 'due_date')

@@ -1,6 +1,6 @@
 import pytest
-import asyncio
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
+from contextlib import contextmanager
 import sys
 import os
 
@@ -17,6 +17,7 @@ from telegram import Update, User, Message, Chat, CallbackQuery
 from telegram.ext import ConversationHandler, ContextTypes
 import librarybot
 import db_data
+from db_utils import get_db_connection
 
 # Помечаем все тесты в этом файле как асинхронные для pytest
 pytestmark = pytest.mark.asyncio
@@ -45,12 +46,20 @@ def _create_mock_update(text=None, callback_data=None, user_id=12345, chat_id=12
 
 # --- Основной интеграционный тест ---
 
-async def test_full_registration_flow(db_session):
+async def test_full_registration_flow(db_session, monkeypatch):
     """
     Интеграционный тест для полного цикла регистрации пользователя.
     Использует фикстуру `db_session` для работы с чистой тестовой БД.
     """
     # --- Подготовка ---
+    # Создаем мок-контекст менеджера, который будет возвращать нашу тестовую сессию
+    @contextmanager
+    def mock_get_db_connection():
+        yield db_session
+
+    # Патчим функцию get_db_connection в модуле librarybot, чтобы она использовала нашу тестовую БД
+    monkeypatch.setattr(librarybot, 'get_db_connection', mock_get_db_connection)
+
     context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
     context.bot = AsyncMock()
     context.user_data = {}
@@ -106,6 +115,7 @@ async def test_full_registration_flow(db_session):
     update = _create_mock_update(text="ValidPassword123")
     next_state = await librarybot.get_password(update, context)
     assert next_state == librarybot.REGISTER_CONFIRM_PASSWORD
+    # Сообщение должно редактироваться, чтобы скрыть пароль
     update.message.edit_text.assert_called_once() 
 
     # --- Шаг 10: Ввод второго пароля (подтверждение) ---

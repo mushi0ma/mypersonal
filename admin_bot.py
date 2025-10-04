@@ -20,6 +20,7 @@ ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
 
 # --- Импорт наших модулей ---
 import db_data
+from db_utils import get_db_connection # Импортируем функцию для получения соединения
 from tasks import create_and_send_notification
 
 # --- Состояния для диалогов ---
@@ -67,7 +68,8 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     message_text = update.message.text
     await update.message.reply_text("Начинаю рассылку...")
     try:
-        user_db_ids = db_data.get_all_user_ids()
+        with get_db_connection() as conn:
+            user_db_ids = db_data.get_all_user_ids(conn)
         for user_id in user_db_ids:
             # Вызываем новую "умную" задачу
             create_and_send_notification.delay(user_id=user_id, text=message_text, category='broadcast')
@@ -92,7 +94,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['current_stats_page'] = page
     offset = page * users_per_page
     try:
-        users, total_users = db_data.get_all_users(limit=users_per_page, offset=offset)
+        with get_db_connection() as conn:
+            users, total_users = db_data.get_all_users(conn, limit=users_per_page, offset=offset)
         if not users and page == 0:
             await update.message.reply_text("В базе данных пока нет пользователей.")
             return
@@ -124,9 +127,10 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_page = context.user_data.get('current_stats_page', 0)
     user_id = int(query.data.split('_')[3])
     try:
-        user = db_data.get_user_by_id(user_id)
-        borrow_history = db_data.get_user_borrow_history(user_id)
-        rating_history = db_data.get_user_ratings(user_id)
+        with get_db_connection() as conn:
+            user = db_data.get_user_by_id(conn, user_id)
+            borrow_history = db_data.get_user_borrow_history(conn, user_id)
+            rating_history = db_data.get_user_ratings(conn, user_id)
         reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
         age = calculate_age(user['dob'])
         message_parts = [
@@ -185,7 +189,8 @@ async def process_delete_confirmation(update: Update, context: ContextTypes.DEFA
     user_id = int(query.data.split('_')[3])
     current_page = context.user_data.get('current_stats_page', 0)
     try:
-        result = db_data.delete_user_by_admin(user_id)
+        with get_db_connection() as conn:
+            result = db_data.delete_user_by_admin(conn, user_id)
         await query.edit_message_text(f"Пользователь успешно удален.")
     except Exception as e:
         await query.edit_message_text(f"Ошибка при удалении: {e}")

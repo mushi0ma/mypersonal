@@ -23,8 +23,8 @@ USER_DATA = {
 
 def test_add_user_success(db_session):
     """Тестирует успешное добавление пользователя в реальную тестовую БД."""
-    # Действие: вызываем нашу функцию
-    user_id = db_data.add_user(USER_DATA)
+    # Действие: вызываем нашу функцию, передавая соединение
+    user_id = db_data.add_user(db_session, USER_DATA)
 
     # Проверка: подключаемся к БД и проверяем, что пользователь действительно там
     assert isinstance(user_id, int)
@@ -41,19 +41,19 @@ def test_add_user_success(db_session):
 def test_add_user_already_exists(db_session):
     """Тестирует выброс исключения при попытке добавить дубликат."""
     # Подготовка: сначала успешно добавляем пользователя
-    db_data.add_user(USER_DATA)
+    db_data.add_user(db_session, USER_DATA)
 
     # Действие и Проверка: ожидаем, что вторая попытка вызовет UserExistsError
     with pytest.raises(UserExistsError):
-        db_data.add_user(USER_DATA)
+        db_data.add_user(db_session, USER_DATA)
 
 def test_get_user_by_login_found(db_session):
     """Тестирует поиск существующего пользователя."""
     # Подготовка: добавляем пользователя, чтобы было что искать
-    user_id = db_data.add_user(USER_DATA)
+    user_id = db_data.add_user(db_session, USER_DATA)
 
     # Действие: ищем этого пользователя по его юзернейму
-    found_user = db_data.get_user_by_login(USER_DATA['username'])
+    found_user = db_data.get_user_by_login(db_session, USER_DATA['username'])
 
     # Проверка: убеждаемся, что нашелся правильный пользователь
     assert found_user is not None
@@ -64,4 +64,4 @@ def test_get_user_by_login_not_found(db_session):
     """Тестирует выброс исключения, если пользователь не найден."""
     # Действие и Проверка: ожидаем NotFoundError при поиске несуществующего пользователя
     with pytest.raises(NotFoundError):
-        db_data.get_user_by_login('non_existent_user')
+        db_data.get_user_by_login(db_session, 'non_existent_user')
