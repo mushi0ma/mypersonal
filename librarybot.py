@@ -48,8 +48,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN,
     USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING, USER_DELETE_CONFIRM,
     USER_RESERVE_BOOK_CONFIRM,
-    USER_VIEW_HISTORY, USER_NOTIFICATIONS
-) = range(26)
+    USER_VIEW_HISTORY, USER_NOTIFICATIONS,
+    SHOWING_GENRES, SHOWING_GENRE_BOOKS
+) = range(28)
 
 
 # --------------------------
@@ -746,6 +747,53 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
             await query.edit_message_text(f"Не удалось удалить: {result}")
             return await user_menu(update, context)
 
+async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает пользователю список жанров для выбора."""
+    query = update.callback_query
+    await query.answer()
+
+    with get_db_connection() as conn:
+        genres = db_data.get_unique_genres(conn)
+    
+    if not genres:
+        await query.edit_message_text("К сожалению, в каталоге пока нет книг с указанием жанра.")
+        return
+
+    keyboard = []
+    for genre in genres:
+        # callback_data должен быть уникальным и содержать информацию о жанре
+        keyboard.append([InlineKeyboardButton(genre, callback_data=f"genre_{genre}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="back_to_main_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text("Выберите интересующий вас жанр:", reply_markup=reply_markup)
+
+
+async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает список доступных книг в выбранном жанре."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Извлекаем жанр из callback_data. Пример: "genre_Фантастика"
+    genre = query.data.split('_', 1)[1]
+
+    with get_db_connection() as conn:
+        books = db_data.get_available_books_by_genre(conn, genre)
+
+    if not books:
+        message_text = f"В жанре '{genre}' свободных книг не найдено."
+    else:
+        message_parts = [f"📚 **Книги в жанре '{genre}':**\n"]
+        for book in books:
+            message_parts.append(f"• *{book['name']}* ({book['author']})")
+        message_text = "\n".join(message_parts)
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад к выбору жанра", callback_data="find_by_genre")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -786,6 +834,7 @@ def main() -> None:
                 CallbackQueryHandler(ask_delete_self_confirmation, pattern="^user_delete_account$"),
                 CallbackQueryHandler(logout, pattern="^logout$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),
+                CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
             ],
             USER_BORROW_BOOK_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_borrow_book),
@@ -816,6 +865,14 @@ def main() -> None:
             USER_DELETE_CONFIRM: [
                 CallbackQueryHandler(process_delete_self_confirmation, pattern="^user_confirm_self_delete$"),
                 CallbackQueryHandler(view_profile, pattern="^user_profile$"),
+            ],
+            SHOWING_GENRES: [
+                CallbackQueryHandler(show_books_in_genre, pattern=r"^genre_"),
+                CallbackQueryHandler(user_menu, pattern="^user_menu$") # Обработка кнопки "Назад в меню"
+            ],
+            SHOWING_GENRE_BOOKS: [
+                CallbackQueryHandler(show_genres, pattern="^find_by_genre$"), # Обработка кнопки "Назад к жанрам"
+                CallbackQueryHandler(user_menu, pattern="^user_menu$")
             ],
         },
         fallbacks=[CommandHandler("start", start)],

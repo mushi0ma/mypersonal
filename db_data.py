@@ -488,3 +488,30 @@ def add_new_book(conn, book_data: dict):
         cur.execute(sql, book_data)
         new_book_id = cur.fetchone()[0]
     return new_book_id
+
+def get_unique_genres(conn):
+    """Возвращает список всех уникальных жанров из таблицы книг."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT genre FROM books WHERE genre IS NOT NULL AND genre != '' ORDER BY genre")
+        genres = [row[0] for row in cur.fetchall()]
+    return genres
+
+def get_available_books_by_genre(conn, genre: str):
+    """Возвращает список свободных книг указанного жанра."""
+    with conn.cursor() as cur:
+        # Находим ID книг, которые сейчас на руках
+        cur.execute("SELECT book_id FROM borrowed_books WHERE return_date IS NULL")
+        borrowed_ids = {row[0] for row in cur.fetchall()}
+
+        # Выбираем книги нужного жанра, которых нет в списке "на руках"
+        cur.execute("SELECT id, name, author FROM books WHERE genre = %s ORDER BY name", (genre,))
+        all_books_in_genre = cur.fetchall()
+        
+        available_books = []
+        columns = [desc[0] for desc in cur.description]
+        for book_row in all_books_in_genre:
+            book_dict = dict(zip(columns, book_row))
+            if book_dict['id'] not in borrowed_ids:
+                available_books.append(book_dict)
+                
+    return available_books
