@@ -1,10 +1,7 @@
 services:
   test_db:
     image: postgres:14-alpine
-    # Используем переменные из .env.test для инициализации БД
-    env_file: .env.test
     environment:
-      # Эти переменные обязательны для образа postgres
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
