@@ -401,3 +401,55 @@ def get_user_activity(conn, user_id: int, limit: int, offset: int):
         activity_on_page = [dict(zip(columns, row)) for row in rows]
         
         return activity_on_page, total_logs
+    
+def get_all_books_paginated(conn, limit: int, offset: int):
+    """Возвращает порцию книг для админ-панели и их общее количество."""
+    with conn.cursor() as cur:
+        # Считаем общее количество книг
+        cur.execute("SELECT COUNT(*) FROM books")
+        total_books = cur.fetchone()[0]
+
+        # Получаем срез книг с информацией о том, взята ли книга
+        cur.execute(
+            """
+            SELECT 
+                b.id, 
+                b.name,
+                CASE WHEN bb.id IS NOT NULL AND bb.return_date IS NULL THEN TRUE ELSE FALSE END AS is_borrowed
+            FROM books b
+            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
+            ORDER BY b.name
+            LIMIT %s OFFSET %s
+            """,
+            (limit, offset)
+        )
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        books_on_page = [dict(zip(columns, row)) for row in rows]
+        
+        return books_on_page, total_books
+
+def get_book_details(conn, book_id: int):
+    """Возвращает детальную информацию о книге, включая текущего владельца."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 
+                b.id, b.name, b.author, b.genre, b.description, b.cover_image_id,
+                u.id as user_id,
+                u.username,
+                bb.borrow_date
+            FROM books b
+            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
+            LEFT JOIN users u ON bb.user_id = u.id
+            WHERE b.id = %s
+            """,
+            (book_id,)
+        )
+        
+        row = cur.fetchone()
+        if not row:
+            return None
+            
+        columns = [desc[0] for desc in cur.description]
+        return dict(zip(columns, row))

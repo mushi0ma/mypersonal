@@ -55,7 +55,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Добро пожаловать в панель администратора!\n"
         "Доступные команды:\n"
         "/broadcast - Отправить сообщение всем пользователям\n"
-        "/stats - Показать статистику"
+        "/stats - Показать статистику пользователей\n"
+        "/books - Управление каталогом книг"
     )
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -245,6 +246,107 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         await query.edit_message_text(f"Произошла ошибка при получении логов: {e}")
 
+async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает постраничный список всех книг."""
+    query = update.callback_query
+    page = 0
+    books_per_page = 5
+
+    if query:
+        await query.answer()
+        page = int(query.data.split('_')[2])
+    
+    context.user_data['current_books_page'] = page
+    offset = page * books_per_page
+
+    try:
+        with get_db_connection() as conn:
+            books, total_books = db_data.get_all_books_paginated(conn, limit=books_per_page, offset=offset)
+
+        message_text = f"📚 **Всего книг в каталоге: {total_books}**\n\nСтраница {page + 1}:"
+        keyboard = []
+        for book in books:
+            status_icon = "🔴" if book['is_borrowed'] else "🟢"
+            button_text = f"{status_icon} {book['name']}"
+            callback_data = f"admin_view_book_{book['id']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"books_page_{page - 1}"))
+        if (page + 1) * books_per_page < total_books:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"books_page_{page + 1}"))
+        
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if query:
+            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        error_message = f"Ошибка при получении списка книг: {e}"
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
+
+
+async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает детальную карточку книги."""
+    query = update.callback_query
+    await query.answer()
+    book_id = int(query.data.split('_')[3])
+    current_page = context.user_data.get('current_books_page', 0)
+
+    try:
+        with get_db_connection() as conn:
+            book = db_data.get_book_details(conn, book_id)
+
+        if not book:
+            await query.edit_message_text("Книга не найдена.")
+            return
+
+        message_parts = [
+            f"**📖 Карточка книги: \"{book['name']}\"**",
+            f"**Автор:** {book['author']}",
+            f"**Жанр:** {book['genre']}",
+            f"**Описание:** {book['description']}\n"
+        ]
+
+        if book['username']:
+            borrow_date_str = book['borrow_date'].strftime('%d.%m.%Y')
+            message_parts.append(f"🔴 **Статус:** Занята (у @{book['username']} с {borrow_date_str})")
+        else:
+            message_parts.append("🟢 **Статус:** Свободна")
+        
+        message_text = "\n".join(message_parts)
+
+        keyboard = [
+            # Сюда мы позже добавим кнопки "Редактировать" и "Удалить"
+            [InlineKeyboardButton("⬅️ Назад к списку книг", callback_data=f"books_page_{current_page}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Отправляем фото и текст
+        if book.get('cover_image_id'):
+            await query.message.delete() # Удаляем старое сообщение со списком
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=book['cover_image_id'],
+                caption=message_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        await query.edit_message_text(f"Произошла ошибка при получении деталей книги: {e}")
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -266,6 +368,9 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(show_user_activity, pattern="^admin_activity_"))
     application.add_handler(CallbackQueryHandler(ask_for_delete_confirmation, pattern="^admin_delete_user_"))
     application.add_handler(CallbackQueryHandler(process_delete_confirmation, pattern="^admin_confirm_delete_"))
+    application.add_handler(CommandHandler("books", show_books_list, filters=admin_filter))
+    application.add_handler(CallbackQueryHandler(show_books_list, pattern="^books_page_"))
+    application.add_handler(CallbackQueryHandler(show_book_details, pattern="^admin_view_book_"))
 
     print("✅ Админ-бот запущен.")
     application.run_polling()
