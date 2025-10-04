@@ -14,7 +14,7 @@ load_dotenv(dotenv_path='.env.test', encoding='utf-8')
 def test_db_connection():
     """Создает соединение с тестовой базой данных."""
     conn_pool = None
-    conn = None # <-- ИНИЦИАЛИЗИРУЕМ conn ЗДЕСЬ
+    conn = None # Инициализируем conn здесь
     try:
         conn_pool = psycopg2.pool.SimpleConnectionPool(
             minconn=1, maxconn=1,
@@ -28,7 +28,7 @@ def test_db_connection():
         print("\n--- Connected to TEST database ---")
         yield conn
     finally:
-        if conn:
+        if conn and conn_pool:
             conn_pool.putconn(conn)
         if conn_pool:
             conn_pool.closeall()
