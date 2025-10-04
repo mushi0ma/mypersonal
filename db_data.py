@@ -453,3 +453,17 @@ def get_book_details(conn, book_id: int):
             
         columns = [desc[0] for desc in cur.description]
         return dict(zip(columns, row))
+    
+def update_book_field(conn, book_id: int, field: str, value: str):
+    """Обновляет указанное поле для указанной книги."""
+    # Белый список полей для безопасности, чтобы предотвратить SQL-инъекции
+    allowed_fields = ["name", "author", "genre", "description"]
+    if field not in allowed_fields:
+        raise ValueError("Недопустимое поле для обновления")
+
+    # Динамически, но безопасно формируем запрос
+    sql = f"UPDATE books SET {field} = %s WHERE id = %s"
+    
+    with conn.cursor() as cur:
+        cur.execute(sql, (value, book_id))
+    return True

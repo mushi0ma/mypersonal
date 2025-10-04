@@ -25,7 +25,7 @@ from tasks import create_and_send_notification
 
 # --- Состояния для диалогов ---
 BROADCAST_MESSAGE = range(1)
-
+SELECTING_BOOK_FIELD, UPDATING_BOOK_FIELD = range(2)
 # --- Ограничение доступа ---
 admin_filter = filters.User(user_id=ADMIN_TELEGRAM_ID)
 
@@ -299,7 +299,8 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку книги."""
     query = update.callback_query
     await query.answer()
-    book_id = int(query.data.split('_')[3])
+    query_data = query.data.replace('_cancel', '')
+    book_id = int(query_data.split('_')[3])
     current_page = context.user_data.get('current_books_page', 0)
 
     try:
@@ -327,6 +328,7 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [
             # Сюда мы позже добавим кнопки "Редактировать" и "Удалить"
+            [InlineKeyboardButton("✏️ Редактировать", callback_data=f"admin_edit_book_{book['id']}")],
             [InlineKeyboardButton("⬅️ Назад к списку книг", callback_data=f"books_page_{current_page}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -347,12 +349,109 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.edit_message_text(f"Произошла ошибка при получении деталей книги: {e}")
 
+async def start_book_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает диалог редактирования книги, показывая поля для выбора."""
+    query = update.callback_query
+    await query.answer()
+    book_id = int(query.data.split('_')[3])
+    context.user_data['book_to_edit'] = book_id
+
+    keyboard = [
+        [InlineKeyboardButton("Название", callback_data=f"edit_field_name")],
+        [InlineKeyboardButton("Автор", callback_data=f"edit_field_author")],
+        [InlineKeyboardButton("Жанр", callback_data=f"edit_field_genre")],
+        [InlineKeyboardButton("Описание", callback_data=f"edit_field_description")],
+        [InlineKeyboardButton("⬅️ Назад к карточке", callback_data=f"admin_view_book_{book_id}_cancel")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_caption(caption="Какое поле вы хотите отредактировать?", reply_markup=reply_markup)
+    
+    return SELECTING_BOOK_FIELD
+
+async def prompt_for_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Запрашивает у администратора новое значение для выбранного поля."""
+    query = update.callback_query
+    await query.answer()
+    
+    field_to_edit = query.data.split('_')[2]
+    context.user_data['field_to_edit'] = field_to_edit
+    
+    field_map = {
+        'name': 'название',
+        'author': 'автора',
+        'genre': 'жанр',
+        'description': 'описание'
+    }
+    
+    book_id = context.user_data['book_to_edit']
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_book_{book_id}_cancel")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_caption(
+        caption=f"Пришлите новое **{field_map[field_to_edit]}** для книги.\n\nДля отмены нажмите кнопку ниже.",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    
+    return UPDATING_BOOK_FIELD
+
+async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обновляет информацию о книге в БД и завершает диалог."""
+    new_value = update.message.text
+    book_id = context.user_data.get('book_to_edit')
+    field = context.user_data.get('field_to_edit')
+
+    try:
+        with get_db_connection() as conn:
+            db_data.update_book_field(conn, book_id, field, new_value)
+        
+        await update.message.reply_text("✅ Информация о книге успешно обновлена!")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Произошла ошибка при обновлении: {e}")
+        
+    finally:
+        # Очищаем временные данные
+        context.user_data.pop('book_to_edit', None)
+        context.user_data.pop('field_to_edit', None)
+        
+        # "Фальшивый" вызов для возврата к карточке книги
+        query_data = f"admin_view_book_{book_id}"
+        update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
+        await show_book_details(update, context)
+
+    return ConversationHandler.END
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
 
 def main() -> None:
     application = Application.builder().token(ADMIN_BOT_TOKEN).build()
+
+    edit_book_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_book_edit, pattern="^admin_edit_book_")],
+        states={
+            SELECTING_BOOK_FIELD: [
+                CallbackQueryHandler(prompt_for_update, pattern="^edit_field_"),
+            ],
+            UPDATING_BOOK_FIELD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_book_update)
+            ],
+        },
+        fallbacks=[
+            # Обработчик для кнопки "Назад к карточке" и "Отмена"
+            CallbackQueryHandler(show_book_details, pattern="^admin_view_book_.*_cancel$"),
+            CommandHandler("cancel", cancel) # Общая команда отмены
+        ],
+        # Позволяет повторно входить в диалог по кнопке
+        map_to_parent={
+            ConversationHandler.END: -1 # Возвращаемся в "основное" состояние
+        }
+    )
+    
+    application.add_handler(edit_book_handler)
+
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", start_broadcast, filters=admin_filter)],
         states={
