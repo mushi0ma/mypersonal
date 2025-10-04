@@ -158,6 +158,7 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_parts.append("Нет оценок.")
         message_text = "\n".join(message_parts)
         keyboard = [
+            [InlineKeyboardButton("📜 История действий", callback_data=f"admin_activity_{user_id}_0")],
             [InlineKeyboardButton("🗑️ Удалить пользователя", callback_data=f"admin_delete_user_{user_id}")],
             [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"stats_page_{current_page}")]
         ]
@@ -197,6 +198,54 @@ async def process_delete_confirmation(update: Update, context: ContextTypes.DEFA
     query.data = f"stats_page_{current_page}"
     await stats(update, context)
 
+async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает постраничный лог активности пользователя."""
+    query = update.callback_query
+    await query.answer()
+
+    # Извлекаем ID пользователя и номер страницы
+    # e.g., "admin_activity_12_1" -> user_id=12, page=1
+    parts = query.data.split('_')
+    user_id = int(parts[2])
+    page = int(parts[3])
+    
+    logs_per_page = 10
+
+    try:
+        logs, total_logs = db_data.get_user_activity(user_id, limit=logs_per_page, offset=page * logs_per_page)
+
+        user = db_data.get_user_by_id(user_id) # Получаем имя для заголовка
+        
+        message_parts = [f"**📜 Журнал действий для `{user['username']}`**\n(Всего записей: {total_logs}, страница {page + 1})\n"]
+
+        if logs:
+            for log in logs:
+                timestamp_str = log['timestamp'].strftime('%d.%m.%Y %H:%M')
+                details = f"({log['details']})" if log['details'] else ""
+                message_parts.append(f"`{timestamp_str}` - **{log['action']}** {details}")
+        else:
+            message_parts.append("Нет записей об активности.")
+
+        # Кнопки навигации
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"admin_activity_{user_id}_{page - 1}"))
+        if (page + 1) * logs_per_page < total_logs:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"admin_activity_{user_id}_{page + 1}"))
+
+        keyboard = []
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        # Кнопка возврата к карточке пользователя
+        keyboard.append([InlineKeyboardButton("👤 Назад к карточке", callback_data=f"admin_view_user_{user_id}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        await query.edit_message_text(f"Произошла ошибка при получении логов: {e}")
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -215,6 +264,7 @@ def main() -> None:
     application.add_handler(CommandHandler("stats", stats, filters=admin_filter))
     application.add_handler(CallbackQueryHandler(stats, pattern="^stats_page_"))
     application.add_handler(CallbackQueryHandler(view_user_profile, pattern="^admin_view_user_"))
+    application.add_handler(CallbackQueryHandler(show_user_activity, pattern="^admin_activity_"))
     application.add_handler(CallbackQueryHandler(ask_for_delete_confirmation, pattern="^admin_delete_user_"))
     application.add_handler(CallbackQueryHandler(process_delete_confirmation, pattern="^admin_confirm_delete_"))
 
