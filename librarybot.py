@@ -958,7 +958,6 @@ def main() -> None:
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),
                 CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
                 CallbackQueryHandler(start_search, pattern="^search_book$"),
-                CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
             ],
             USER_BORROW_BOOK_SELECT: [
                 CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
@@ -1005,7 +1004,8 @@ def main() -> None:
                 # Кнопка "Назад к поиску"
                 CallbackQueryHandler(start_search, pattern="^search_book$"),
                 # Кнопка "Назад в меню"
-                CallbackQueryHandler(user_menu, pattern="^user_menu$") 
+                CallbackQueryHandler(user_menu, pattern="^user_menu$"),
+                CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
             ],
         },
         fallbacks=[CommandHandler("start", start)],
