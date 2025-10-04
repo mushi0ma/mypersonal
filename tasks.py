@@ -26,6 +26,24 @@ except Exception as e:
     notifier_bot = None
 
 # --- НОВАЯ УМНАЯ ЗАДАЧА ---
+
+@celery_app.task
+def send_telegram_message(telegram_id: int, message: str):
+    """
+    Отправляет прямое сообщение пользователю через уведомителя.
+    Используется для отправки кодов верификации до того, как создан user_id.
+    """
+    if not notifier_bot:
+        print(f"❌ Notifier bot is not available. Cannot send message to {telegram_id}")
+        return
+    try:
+        notifier_bot.send_message(chat_id=telegram_id, text=message)
+        print(f"✅ Directly sent message to {telegram_id}.")
+    except telegram.error.TelegramError as e:
+        print(f"❌ Error sending direct message to {telegram_id}: {e}")
+    except Exception as e:
+        print(f"❌ An unexpected error occurred in send_telegram_message: {e}")
+
 @celery_app.task
 def create_and_send_notification(user_id: int, text: str, category: str):
     """
