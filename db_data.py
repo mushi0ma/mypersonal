@@ -515,3 +515,68 @@ def get_available_books_by_genre(conn, genre: str):
                 available_books.append(book_dict)
                 
     return available_books
+
+def search_available_books(conn, search_term: str):
+    """
+    Ищет ДОСТУПНЫЕ книги по части названия или автора (регистронезависимо).
+    Эта функция специально для пользовательского поиска.
+    """
+    with conn.cursor() as cur:
+        # 1. Получаем ID всех книг, которые сейчас на руках
+        cur.execute("SELECT book_id FROM borrowed_books WHERE return_date IS NULL")
+        borrowed_ids = {row[0] for row in cur.fetchall()}
+
+        # 2. Ищем все книги, подходящие под запрос
+        search_pattern = f"%{search_term}%"
+        cur.execute(
+            """
+            SELECT b.id, b.name, a.name as author
+            FROM books b
+            JOIN authors a ON b.author_id = a.id
+            WHERE b.name ILIKE %s OR a.name ILIKE %s
+            ORDER BY b.name
+            """,
+            (search_pattern, search_pattern)
+        )
+        
+        all_found_books_rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        
+        # 3. Фильтруем результаты, оставляя только те, которых нет в списке взятых
+        available_books = []
+        for row in all_found_books_rows:
+            book = dict(zip(columns, row))
+            if book['id'] not in borrowed_ids:
+                available_books.append(book)
+                
+    return available_books
+
+def get_book_card_details(conn, book_id: int):
+    """
+    Возвращает все данные для карточки книги, включая статус доступности.
+    """
+    with conn.cursor() as cur:
+        # 1. Проверяем, на руках ли книга
+        cur.execute("SELECT 1 FROM borrowed_books WHERE book_id = %s AND return_date IS NULL", (book_id,))
+        is_borrowed = cur.fetchone() is not None
+
+        # 2. Получаем основные данные о книге
+        cur.execute(
+            """
+            SELECT b.id, b.name, a.name as author, b.genre, b.description, b.cover_image_id
+            FROM books b
+            JOIN authors a ON b.author_id = a.id
+            WHERE b.id = %s
+            """,
+            (book_id,)
+        )
+        row = cur.fetchone()
+        if not row:
+            raise NotFoundError("Книга не найдена")
+
+        columns = [desc[0] for desc in cur.description]
+        book_details = dict(zip(columns, row))
+        
+        # 3. Добавляем статус доступности
+        book_details['is_available'] = not is_borrowed
+        return book_details

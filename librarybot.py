@@ -49,8 +49,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING, USER_DELETE_CONFIRM,
     USER_RESERVE_BOOK_CONFIRM,
     USER_VIEW_HISTORY, USER_NOTIFICATIONS,
-    SHOWING_GENRES, SHOWING_GENRE_BOOKS
-) = range(28)
+    SHOWING_GENRES, SHOWING_GENRE_BOOKS,
+    GETTING_SEARCH_QUERY, SHOWING_SEARCH_RESULTS
+) = range(30)
 
 
 # --------------------------
@@ -367,9 +368,22 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"📚 Взято книг: {len(borrowed_books)}/{borrow_limit}"
     )
     keyboard = [
-        [InlineKeyboardButton("Взять книгу", callback_data="user_borrow"), InlineKeyboardButton("Вернуть книгу", callback_data="user_return")],
-        [InlineKeyboardButton("Оценить книгу", callback_data="user_rate"), InlineKeyboardButton("Профиль", callback_data="user_profile")],
-        [InlineKeyboardButton("Уведомления 📬", callback_data="user_notifications"), InlineKeyboardButton("Выйти", callback_data="logout")]
+        [
+            InlineKeyboardButton("🔎 Поиск по названию/автору", callback_data="search_book"),
+            InlineKeyboardButton("📚 Поиск по жанру", callback_data="find_by_genre")
+        ],
+        [
+            InlineKeyboardButton("📥 Взять книгу", callback_data="user_borrow"),
+            InlineKeyboardButton("📤 Вернуть книгу", callback_data="user_return")
+        ],
+        [
+            InlineKeyboardButton("⭐ Оценить книгу", callback_data="user_rate"),
+            InlineKeyboardButton("👤 Профиль", callback_data="user_profile")
+        ],
+        [
+            InlineKeyboardButton("📬 Уведомления", callback_data="user_notifications"),
+            InlineKeyboardButton("🚪 Выйти", callback_data="logout")
+        ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query:
@@ -794,6 +808,90 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
 
+async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает диалог поиска книги по ключевому слову."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        text="Введите название книги или фамилию автора для поиска:",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]])
+    )
+    return GETTING_SEARCH_QUERY
+
+async def process_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ищет книги по запросу пользователя и показывает результаты."""
+    search_term = update.message.text
+    
+    with get_db_connection() as conn:
+        books = db_data.search_available_books(conn, search_term)
+
+    if not books:
+        await update.message.reply_text(
+            text=f"По запросу '{search_term}' ничего не найдено.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Попробовать еще раз", callback_data="search_book")],
+                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
+            ])
+        )
+        return USER_MENU 
+
+    keyboard = []
+    for book in books:
+        keyboard.append([InlineKeyboardButton(f"📖 {book['name']} ({book['author']})", callback_data=f"view_book_{book['id']}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text("Вот что удалось найти:", reply_markup=reply_markup)
+    return SHOWING_SEARCH_RESULTS
+
+async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает детальную карточку книги для пользователя."""
+    query = update.callback_query
+    await query.answer()
+    book_id = int(query.data.split('_')[2])
+    
+    with get_db_connection() as conn:
+        book = db_data.get_book_card_details(conn, book_id)
+
+    message_parts = [
+        f"**📖 {book['name']}**",
+        f"**Автор:** {book['author']}",
+        f"**Жанр:** {book['genre']}",
+        f"\n_{book['description']}_\n"
+    ]
+    
+    keyboard = []
+    if book['is_available']:
+        message_parts.append("🟢 **Статус:** Свободна")
+        keyboard.append([InlineKeyboardButton("✅ Взять эту книгу", callback_data=f"borrow_book_{book['id']}")])
+    else:
+        message_parts.append("🔴 **Статус:** На руках у другого читателя")
+
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к поиску", callback_data="search_book")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message_text = "\n".join(message_parts)
+
+    await query.message.delete()
+    if book.get('cover_image_id'):
+        await context.bot.send_photo(
+            chat_id=query.message.chat_id,
+            photo=book['cover_image_id'],
+            caption=message_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=message_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+    return SHOWING_SEARCH_RESULTS
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -835,6 +933,7 @@ def main() -> None:
                 CallbackQueryHandler(logout, pattern="^logout$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),
                 CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
+                CallbackQueryHandler(start_search, pattern="^search_book$"),
             ],
             USER_BORROW_BOOK_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, process_borrow_book),
@@ -873,6 +972,19 @@ def main() -> None:
             SHOWING_GENRE_BOOKS: [
                 CallbackQueryHandler(show_genres, pattern="^find_by_genre$"), # Обработка кнопки "Назад к жанрам"
                 CallbackQueryHandler(user_menu, pattern="^user_menu$")
+            ],
+            GETTING_SEARCH_QUERY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_search_query),
+                CallbackQueryHandler(user_menu, pattern="^user_menu$")
+            ],
+            SHOWING_SEARCH_RESULTS: [
+                CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
+                # Позволяем взять книгу прямо из карточки
+                CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"), 
+                # Кнопка "Назад к поиску"
+                CallbackQueryHandler(start_search, pattern="^search_book$"),
+                # Кнопка "Назад в меню"
+                CallbackQueryHandler(user_menu, pattern="^user_menu$") 
             ],
         },
         fallbacks=[CommandHandler("start", start)],
