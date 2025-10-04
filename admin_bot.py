@@ -327,10 +327,15 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_text = "\n".join(message_parts)
 
         keyboard = [
-            # Сюда мы позже добавим кнопки "Редактировать" и "Удалить"
-            [InlineKeyboardButton("✏️ Редактировать", callback_data=f"admin_edit_book_{book['id']}")],
-            [InlineKeyboardButton("⬅️ Назад к списку книг", callback_data=f"books_page_{current_page}")]
+            [InlineKeyboardButton("✏️ Редактировать", callback_data=f"admin_edit_book_{book['id']}")]
         ]
+
+        # Кнопка удаления появляется только для свободных книг
+        if not book['username']:
+            keyboard.append([InlineKeyboardButton("🗑️ Удалить", callback_data=f"admin_delete_book_{book['id']}")])
+        
+        keyboard.append([InlineKeyboardButton("⬅️ Назад к списку книг", callback_data=f"books_page_{current_page}")])
+
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         # Отправляем фото и текст
@@ -422,6 +427,46 @@ async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     return ConversationHandler.END
 
+async def ask_for_book_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрашивает подтверждение на удаление книги."""
+    query = update.callback_query
+    await query.answer()
+    book_id = int(query.data.split('_')[3])
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Да, удалить", callback_data=f"admin_confirm_book_delete_{book_id}"),
+            InlineKeyboardButton("❌ Нет", callback_data=f"admin_view_book_{book_id}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Поскольку мы могли прийти с сообщения с фото, используем edit_caption
+    await query.edit_message_caption(
+        caption="Вы уверены, что хотите удалить эту книгу из каталога?\n\nЭто действие необратимо.",
+        reply_markup=reply_markup
+    )
+
+
+async def process_book_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает удаление книги и возвращает к списку."""
+    query = update.callback_query
+    await query.answer()
+    book_id = int(query.data.split('_')[4]) # `confirm` добавляет 1 часть, поэтому индекс 4
+    current_page = context.user_data.get('current_books_page', 0)
+
+    try:
+        with get_db_connection() as conn:
+            db_data.delete_book(conn, book_id)
+        await query.edit_message_caption(caption="✅ Книга успешно удалена.")
+
+    except Exception as e:
+        await query.edit_message_caption(caption=f"❌ Ошибка при удалении книги: {e}")
+
+    # Имитируем нажатие на кнопку "Назад", чтобы показать обновленный список книг
+    query.data = f"books_page_{current_page}"
+    await show_books_list(update, context)
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -470,6 +515,8 @@ def main() -> None:
     application.add_handler(CommandHandler("books", show_books_list, filters=admin_filter))
     application.add_handler(CallbackQueryHandler(show_books_list, pattern="^books_page_"))
     application.add_handler(CallbackQueryHandler(show_book_details, pattern="^admin_view_book_"))
+    application.add_handler(CallbackQueryHandler(ask_for_book_delete_confirmation, pattern="^admin_delete_book_"))
+    application.add_handler(CallbackQueryHandler(process_book_delete, pattern="^admin_confirm_book_delete_"))
 
     print("✅ Админ-бот запущен.")
     application.run_polling()

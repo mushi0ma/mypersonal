@@ -467,3 +467,12 @@ def update_book_field(conn, book_id: int, field: str, value: str):
     with conn.cursor() as cur:
         cur.execute(sql, (value, book_id))
     return True
+
+def delete_book(conn, book_id: int):
+    """Удаляет книгу и все связанные с ней записи о взятии/возврате."""
+    with conn.cursor() as cur:
+        # Сначала удаляем связанные записи в borrowed_books, чтобы не нарушать целостность данных
+        cur.execute("DELETE FROM borrowed_books WHERE book_id = %s", (book_id,))
+        # Теперь удаляем саму книгу
+        cur.execute("DELETE FROM books WHERE id = %s", (book_id,))
+    return True
