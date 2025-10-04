@@ -34,7 +34,7 @@ def get_user_by_login(conn, login_query: str):
         )
         row = cur.fetchone()
         if not row:
-            raise NotFoundError("Пользователь не найден.")
+            raise NotFoundError("Пользователь с таким логином не найден.")
         columns = [desc[0] for desc in cur.description]
         return dict(zip(columns, row))
 
@@ -106,13 +106,13 @@ def add_reservation(conn, user_id, book_id):
         try:
             cur.execute("INSERT INTO reservations (user_id, book_id) VALUES (%s, %s)", (user_id, book_id))
             conn.commit()
-            return "Успешно"
+            return "Книга успешно зарезервирована."
         except psycopg2.IntegrityError:
             conn.rollback()
             return "Вы уже зарезервировали эту книгу."
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось зарезервировать книгу: {e}")
+            raise DatabaseError(f"Ошибка базы данных при резервировании книги: {e}")
 
 def get_reservations_for_book(conn, book_id):
     """Получает список пользователей, зарезервировавших книгу."""
@@ -129,10 +129,10 @@ def update_user_password(conn, login_query: str, new_password: str):
             if cur.rowcount == 0:
                 raise NotFoundError("Пользователь для обновления пароля не найден.")
             conn.commit()
-            return "Успешно"
+            return "Пароль успешно обновлен."
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось обновить пароль: {e}")
+            raise DatabaseError(f"Ошибка базы данных при обновлении пароля: {e}")
 
 def get_borrowed_books(conn, user_id: int):
     """Получает список книг, взятых пользователем."""
@@ -193,10 +193,10 @@ def borrow_book(conn, user_id: int, book_id: int):
                 return "Книга закончилась."
             cur.execute("INSERT INTO borrowed_books (user_id, book_id, due_date) VALUES (%s, %s, CURRENT_DATE + INTERVAL '14 day')", (user_id, book_id))
             conn.commit()
-            return "Успешно"
+            return "Книга успешно взята."
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось взять книгу: {e}")
+            raise DatabaseError(f"Ошибка базы данных при взятии книги: {e}")
 
 def return_book(conn, borrow_id: int, book_id: int):
     """Обрабатывает возврат книги."""
@@ -205,10 +205,10 @@ def return_book(conn, borrow_id: int, book_id: int):
             cur.execute("UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE borrow_id = %s", (borrow_id,))
             cur.execute("UPDATE books SET available_quantity = available_quantity + 1 WHERE id = %s", (book_id,))
             conn.commit()
-            return "Успешно"
+            return "Книга успешно возвращена."
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось вернуть книгу: {e}")
+            raise DatabaseError(f"Ошибка базы данных при возврате книги: {e}")
 
 def get_user_profile(conn, user_id: int):
     """Получает полные данные профиля пользователя."""
@@ -231,10 +231,10 @@ def add_rating(conn, user_id: int, book_id: int, rating: int):
                 """, (user_id, book_id, rating)
             )
             conn.commit()
-            return "Успешно"
+            return "Оценка успешно сохранена."
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось добавить оценку: {e}")
+            raise DatabaseError(f"Ошибка базы данных при добавлении оценки: {e}")
 
 def update_reservation_status(conn, user_id, book_id, notified: bool):
     """Обновляет статус уведомления для брони."""
@@ -244,7 +244,7 @@ def update_reservation_status(conn, user_id, book_id, notified: bool):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось обновить статус брони: {e}")
+            raise DatabaseError(f"Ошибка базы данных при обновлении статуса брони: {e}")
 
 def get_user_borrow_history(conn, user_id: int):
     """Получает всю историю заимствований пользователя, включая его оценки."""
@@ -285,10 +285,10 @@ def delete_user_by_admin(conn, user_id: int):
                 """, (anonymized_username, anonymized_username, user_id)
             )
             conn.commit()
-            return "Успешно"
+            return "Пользователь успешно удален (анонимизирован)."
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось удалить пользователя: {e}")
+            raise DatabaseError(f"Ошибка базы данных при удалении пользователя: {e}")
 
 def get_user_ratings(conn, user_id: int):
     """Возвращает историю оценок пользователя (книга и оценка)."""
@@ -323,10 +323,10 @@ def delete_user_by_self(conn, user_id: int):
                 """, (anonymized_username, anonymized_username, user_id)
             )
             conn.commit()
-            return "Успешно"
+            return "Аккаунт успешно удален (анонимизирован)."
         except psycopg2.Error as e:
             conn.rollback()
-            raise DatabaseError(f"Не удалось удалить пользователя: {e}")
+            raise DatabaseError(f"Ошибка базы данных при удалении пользователя: {e}")
 
 def create_notification(conn, user_id: int, text: str, category: str):
     """Сохраняет новое уведомление для пользователя в базу данных."""
@@ -336,7 +336,7 @@ def create_notification(conn, user_id: int, text: str, category: str):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            logger.error(f"Не удалось создать уведомление для user_id {user_id}: {e}")
+            logger.error(f"Не удалось создать уведомление для пользователя {user_id}: {e}")
 
 def log_activity(conn, user_id: int, action: str, details: str = None):
     """Записывает действие пользователя в журнал активности."""
@@ -346,7 +346,7 @@ def log_activity(conn, user_id: int, action: str, details: str = None):
             conn.commit()
         except psycopg2.Error as e:
             conn.rollback()
-            logger.error(f"Не удалось записать действие '{action}' для user_id {user_id}: {e}")
+            logger.error(f"Не удалось записать действие '{action}' для пользователя {user_id}: {e}")
 
 def get_telegram_id_by_user_id(conn, user_id: int):
     """Возвращает telegram_id пользователя по его внутреннему id."""
@@ -355,7 +355,7 @@ def get_telegram_id_by_user_id(conn, user_id: int):
         row = cur.fetchone()
         if row and row[0]:
             return row[0]
-        raise NotFoundError(f"Telegram ID для пользователя {user_id} не найден.")
+        raise NotFoundError(f"Telegram ID для пользователя с ID {user_id} не найден.")
 
 def get_notifications_for_user(conn, user_id: int, limit: int = 20):
     """Возвращает последние уведомления для пользователя."""
@@ -371,7 +371,7 @@ def get_notifications_for_user(conn, user_id: int, limit: int = 20):
         )
         rows = cur.fetchall()
         if not rows:
-            raise NotFoundError("Уведомлений не найдено.")
+            raise NotFoundError("Уведомлений для этого пользователя не найдено.")
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in rows]
     
@@ -593,7 +593,7 @@ def get_book_card_details(conn, book_id: int):
         )
         row = cur.fetchone()
         if not row:
-            raise NotFoundError("Книга не найдена")
+            raise NotFoundError("Книга с таким ID не найдена.")
 
         columns = [desc[0] for desc in cur.description]
         book_details = dict(zip(columns, row))
@@ -607,7 +607,7 @@ def update_user_full_name(conn, user_id: int, new_name: str):
     with conn.cursor() as cur:
         cur.execute("UPDATE users SET full_name = %s WHERE id = %s", (new_name, user_id))
         if cur.rowcount == 0:
-            raise NotFoundError("Пользователь не найден для обновления ФИО.")
+            raise NotFoundError("Пользователь с таким ID не найден для обновления ФИО.")
     return True
 
 def update_user_contact(conn, user_id: int, new_contact: str):
@@ -616,10 +616,10 @@ def update_user_contact(conn, user_id: int, new_contact: str):
         try:
             cur.execute("UPDATE users SET contact_info = %s WHERE id = %s", (new_contact, user_id))
             if cur.rowcount == 0:
-                raise NotFoundError("Пользователь не найден для обновления контакта.")
+                raise NotFoundError("Пользователь с таким ID не найден для обновления контакта.")
         except psycopg2.IntegrityError:
             conn.rollback()
-            raise UserExistsError("Этот контакт уже занят другим пользователем.")
+            raise UserExistsError("Этот контакт уже используется другим пользователем.")
     return True
 
 def update_user_password_by_id(conn, user_id: int, new_password: str):
@@ -628,5 +628,5 @@ def update_user_password_by_id(conn, user_id: int, new_password: str):
     with conn.cursor() as cur:
         cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hashed_pass, user_id))
         if cur.rowcount == 0:
-            raise NotFoundError("Пользователь не найден для обновления пароля.")
+            raise NotFoundError("Пользователь с таким ID не найден для обновления пароля.")
     return True
