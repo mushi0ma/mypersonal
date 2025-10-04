@@ -364,7 +364,8 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         borrowed_books = db_data.get_borrowed_books(conn, user['id'])
     borrow_limit = get_user_borrow_limit(user['status'])
     message_text = (
-        f"**Личный кабинет: {user['full_name']}**\n"
+        f"**Главное меню**\n"
+        f"Добро пожаловать, {user['full_name']}!\n\n"
         f"📚 Взято книг: {len(borrowed_books)}/{borrow_limit}"
     )
     keyboard = [
@@ -373,7 +374,7 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             InlineKeyboardButton("📚 Поиск по жанру", callback_data="find_by_genre")
         ],
         [
-            InlineKeyboardButton("📥 Взять книгу", callback_data="user_borrow"),
+            InlineKeyboardButton("📥 Взять книгу", callback_data="search_book"),
             InlineKeyboardButton("📤 Вернуть книгу", callback_data="user_return")
         ],
         [
@@ -761,8 +762,8 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
             await query.edit_message_text(f"Не удалось удалить: {result}")
             return await user_menu(update, context)
 
-async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает пользователю список жанров для выбора."""
+async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает пользователю список жанров и переходит в состояние выбора."""
     query = update.callback_query
     await query.answer()
 
@@ -770,18 +771,22 @@ async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE):
         genres = db_data.get_unique_genres(conn)
     
     if not genres:
-        await query.edit_message_text("К сожалению, в каталоге пока нет книг с указанием жанра.")
-        return
+        await query.edit_message_text(
+            "К сожалению, в каталоге пока нет книг с указанием жанра.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]])
+        )
+        return USER_MENU
 
     keyboard = []
     for genre in genres:
-        # callback_data должен быть уникальным и содержать информацию о жанре
         keyboard.append([InlineKeyboardButton(genre, callback_data=f"genre_{genre}")])
     
-    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="back_to_main_menu")])
+    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text("Выберите интересующий вас жанр:", reply_markup=reply_markup)
+    return SHOWING_GENRES
 
 
 async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -868,12 +873,19 @@ async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         message_parts.append("🔴 **Статус:** На руках у другого читателя")
 
-    keyboard.append([InlineKeyboardButton("⬅️ Назад к поиску", callback_data="search_book")])
+    # --- УЛУЧШЕННАЯ КЛАВИАТУРА ---
+    keyboard.extend([
+        [InlineKeyboardButton("🔎 Новый поиск", callback_data="search_book")],
+        [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
+    ])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     message_text = "\n".join(message_parts)
 
-    await query.message.delete()
+    # Удаляем старое сообщение со списком, чтобы не было путаницы
+    if query.message:
+        await query.message.delete()
+
     if book.get('cover_image_id'):
         await context.bot.send_photo(
             chat_id=query.message.chat_id,
