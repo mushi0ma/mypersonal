@@ -156,23 +156,23 @@ async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     context.user_data.clear()
     context.user_data['registration'] = {}
-    await query.edit_message_text("Начинаем регистрацию. Введите ваше **ФИО**:", parse_mode='Markdown')
+    await query.edit_message_text("📝 Начинаем регистрацию. Введите ваше **ФИО**:", parse_mode='Markdown')
     return REGISTER_NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получает ФИО и запрашивает дату рождения."""
     context.user_data['registration']['full_name'] = update.message.text
-    await update.message.reply_text("Введите **дату рождения** (ДД.ММ.ГГГГ):", parse_mode='Markdown')
+    await update.message.reply_text("🎂 Введите **дату рождения** (ДД.ММ.ГГГГ):", parse_mode='Markdown')
     return REGISTER_DOB
 
 async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получает дату рождения и запрашивает контакт."""
     dob = update.message.text
     if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", dob):
-        await update.message.reply_text("Неверный формат. Используйте **ДД.ММ.ГГГГ**.")
+        await update.message.reply_text("❌ Неверный формат. Используйте **ДД.ММ.ГГГГ**.")
         return REGISTER_DOB
     context.user_data['registration']['dob'] = dob
-    await update.message.reply_text("Введите ваш **контакт** (email, телефон +7... или @username):", parse_mode='Markdown')
+    await update.message.reply_text("📞 Введите ваш **контакт** (email или телефон):", parse_mode='Markdown')
     return REGISTER_CONTACT
 
 async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -181,7 +181,7 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     try:
         with get_db_connection() as conn:
             if db_data.get_user_by_login(conn, contact_processed):
-                await update.message.reply_text("Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.")
+                await update.message.reply_text("🤔 Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.")
                 return REGISTER_CONTACT
     except db_data.NotFoundError:
         pass
@@ -191,10 +191,10 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     sent = await send_verification_message(contact_processed, code, context, update.effective_user.id)
     reply_markup = InlineKeyboardMarkup([get_back_button(REGISTER_CONTACT)])
     if sent:
-        await update.message.reply_text(f"На ваш контакт ({contact_processed}) отправлен **код верификации**. Введите его:", reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text(f"📲 На ваш контакт ({contact_processed}) отправлен **код верификации**. Введите его:", reply_markup=reply_markup, parse_mode='Markdown')
         return REGISTER_VERIFY_CODE
     else:
-        await update.message.reply_text("Не удалось отправить код. Проверьте правильность введенных данных.", reply_markup=reply_markup)
+        await update.message.reply_text("⚠️ Не удалось отправить код. Проверьте правильность введенных данных.", reply_markup=reply_markup)
         return REGISTER_CONTACT
 
 async def verify_registration_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -204,11 +204,11 @@ async def verify_registration_code(update: Update, context: ContextTypes.DEFAULT
             [InlineKeyboardButton("Студент", callback_data="студент"), InlineKeyboardButton("Преподаватель", callback_data="учитель")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Код верный! Теперь выберите ваш статус:", reply_markup=reply_markup)
+        await update.message.reply_text("✅ Код верный! Теперь выберите ваш статус:", reply_markup=reply_markup)
         context.user_data.pop('verification_code', None)
         return REGISTER_STATUS
     else:
-        await update.message.reply_text("Неверный код. Попробуйте еще раз.")
+        await update.message.reply_text("❌ Неверный код. Попробуйте еще раз.")
         return REGISTER_VERIFY_CODE
 
 async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -216,7 +216,7 @@ async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     context.user_data['registration']['status'] = query.data
-    await query.edit_message_text("Придумайте **юзернейм** (на английском, без пробелов, например: `ivanov21`):", parse_mode='Markdown')
+    await query.edit_message_text("🧑‍💻 Придумайте **юзернейм** (на английском, без пробелов, например: `ivanov21`):", parse_mode='Markdown')
     return REGISTER_USERNAME
 
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -226,7 +226,7 @@ async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_text("❌ Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'.")
         return REGISTER_USERNAME
     context.user_data['registration']['username'] = username
-    await update.message.reply_text("Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
+    await update.message.reply_text("🔑 Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
     return REGISTER_PASSWORD
 
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -238,7 +238,7 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_text("❌ Пароль должен содержать минимум 8 символов, включая буквы и цифры/спецсимволы. Попробуйте снова.")
         return REGISTER_PASSWORD
     context.user_data['registration']['password_temp'] = password
-    await update.message.reply_text("Отлично. Теперь **введите пароль еще раз** для подтверждения:", parse_mode='Markdown')
+    await update.message.reply_text("👍 Отлично. Теперь **введите пароль еще раз** для подтверждения:", parse_mode='Markdown')
     return REGISTER_CONFIRM_PASSWORD
 
 async def get_password_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -249,7 +249,7 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
     if context.user_data['registration'].get('password_temp') != password_confirm:
         await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, придумайте пароль заново.")
         # Возвращаемся на шаг назад, чтобы переспросить первый пароль
-        await update.message.reply_text("Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
+        await update.message.reply_text("🔑 Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
         return REGISTER_PASSWORD
 
     context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
@@ -260,7 +260,7 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         with get_db_connection() as conn:
             user_id = db_data.add_user(conn, context.user_data['registration'])
             db_data.log_activity(conn, user_id=user_id, action="registration")
-        await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти.")
+        await update.message.reply_text("🎉 Регистрация успешно завершена! Теперь вы можете войти.")
     except db_data.UserExistsError:
         await update.message.reply_text("❌ Ошибка: этот юзернейм или контакт уже заняты.")
     except Exception as e:
@@ -274,9 +274,9 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
 async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("Забыли пароль?", callback_data="forgot_password")]]
+    keyboard = [[InlineKeyboardButton("🤔 Забыли пароль?", callback_data="forgot_password")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Введите ваш **юзернейм** или **контакт** для входа:", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("👤 Введите ваш **юзернейм** или **контакт** для входа:", reply_markup=reply_markup, parse_mode='Markdown')
     return LOGIN_CONTACT
 
 async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -286,10 +286,10 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         with get_db_connection() as conn:
             user = db_data.get_user_by_login(conn, contact_processed)
         context.user_data['login_user'] = user
-        await update.message.reply_text("Введите ваш **пароль**:", parse_mode='Markdown')
+        await update.message.reply_text("🔑 Введите ваш **пароль**:", parse_mode='Markdown')
         return LOGIN_PASSWORD
     except db_data.NotFoundError:
-        await update.message.reply_text("Пользователь не найден. Попробуйте еще раз.")
+        await update.message.reply_text("❌ Пользователь не найден. Попробуйте еще раз или зарегистрируйтесь.")
         return LOGIN_CONTACT
 
 async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -304,7 +304,7 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop('login_user')
         return await user_menu(update, context)
     else:
-        await update.message.reply_text("Неверный пароль. Попробуйте снова.")
+        await update.message.reply_text("❌ Неверный пароль. Попробуйте снова.")
         return LOGIN_PASSWORD
 
 # --- ФУНКЦИИ ВОССТАНОВЛЕНИЯ ПАРОЛЯ ---
@@ -312,7 +312,7 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
 async def start_forgot_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Введите ваш **юзернейм** или **контакт** для сброса пароля:", parse_mode='Markdown')
+    await query.edit_message_text("🔑 Введите ваш **юзернейм** или **контакт** для сброса пароля:", parse_mode='Markdown')
     return FORGOT_PASSWORD_CONTACT
 
 async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -322,7 +322,7 @@ async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFA
         with get_db_connection() as conn:
             user = db_data.get_user_by_login(conn, contact_processed)
     except db_data.NotFoundError:
-        await update.message.reply_text("Пользователь с такими данными не найден.")
+        await update.message.reply_text("❌ Пользователь с такими данными не найден.")
         return FORGOT_PASSWORD_CONTACT
     contact_to_verify = user['contact_info']
     user_telegram_id = user['telegram_id'] if user['telegram_id'] else update.effective_user.id
@@ -331,19 +331,19 @@ async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFA
     context.user_data['forgot_password_contact'] = user['contact_info'] # Используем основной контакт
     sent = await send_verification_message(contact_to_verify, code, context, user_telegram_id)
     if sent:
-        await update.message.reply_text(f"Код верификации отправлен на {contact_to_verify}. Введите его:")
+        await update.message.reply_text(f"📲 Код верификации отправлен на {contact_to_verify}. Введите его:")
         return FORGOT_PASSWORD_VERIFY_CODE
     else:
-        await update.message.reply_text("Не удалось отправить код верификации.")
+        await update.message.reply_text("⚠️ Не удалось отправить код верификации. Попробуйте еще раз.")
         return FORGOT_PASSWORD_CONTACT
 
 async def verify_forgot_password_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.text == context.user_data.get('forgot_password_code'):
-        await update.message.reply_text("Код верный! Введите **новый пароль**:", parse_mode='Markdown')
+        await update.message.reply_text("✅ Код верный! Введите **новый пароль**:", parse_mode='Markdown')
         context.user_data.pop('forgot_password_code', None)
         return FORGOT_PASSWORD_SET_NEW
     else:
-        await update.message.reply_text("Неверный код. Попробуйте еще раз.")
+        await update.message.reply_text("❌ Неверный код. Попробуйте еще раз.")
         return FORGOT_PASSWORD_VERIFY_CODE
 
 async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -351,10 +351,10 @@ async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     hidden_password_text = "•" * len(new_password)
     await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
     if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", new_password):
-        await update.message.reply_text("❌ Пароль не соответствует требованиям. Попробуйте снова.")
+        await update.message.reply_text("❌ Пароль не соответствует требованиям (минимум 8 символов, буквы и цифры/спецсимволы). Попробуйте снова.")
         return FORGOT_PASSWORD_SET_NEW
     context.user_data['forgot_password_temp'] = new_password
-    await update.message.reply_text("Пожалуйста, **введите новый пароль еще раз**:", parse_mode='Markdown')
+    await update.message.reply_text("👍 Пожалуйста, **введите новый пароль еще раз**:", parse_mode='Markdown')
     return FORGOT_PASSWORD_CONFIRM_NEW
 
 async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -372,7 +372,7 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти.")
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля: {e}")
-        await update.message.reply_text("❌ Ошибка при обновлении пароля.")
+        await update.message.reply_text("❌ Произошла ошибка при обновлении пароля. Попробуйте позже.")
         return FORGOT_PASSWORD_SET_NEW
     context.user_data.clear()
     return await start(update, context)
@@ -380,6 +380,10 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
 # --- ФУНКЦИИ ПОЛЬЗОВАТЕЛЬСКОГО МЕНЮ ---
 
 async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    # Если мы только что отредактировали профиль, покажем его вместо меню
+    if context.user_data.pop('just_edited_profile', False):
+        return await view_profile(update, context)
+
     user = context.user_data.get('current_user')
     if not user:
         return await start(update, context)
@@ -387,9 +391,9 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         borrowed_books = db_data.get_borrowed_books(conn, user['id'])
     borrow_limit = get_user_borrow_limit(user['status'])
     message_text = (
-        f"**Главное меню**\n"
+        f"**🏠 Главное меню**\n"
         f"Добро пожаловать, {user['full_name']}!\n\n"
-        f"📚 Взято книг: {len(borrowed_books)}/{borrow_limit}"
+        f"📖 У вас на руках: **{len(borrowed_books)}/{borrow_limit}** книг."
     )
     keyboard = [
         [
@@ -425,10 +429,10 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if db_data.get_borrowed_books(conn, user['id']):
             keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("Вы не можете выйти, пока у вас есть книги на руках!", reply_markup=reply_markup)
+            await query.edit_message_text("❌ Вы не можете выйти, пока у вас есть книги на руках!", reply_markup=reply_markup)
             return USER_MENU
     context.user_data.clear()
-    await query.edit_message_text("Вы успешно вышли. Введите /start для входа.")
+    await query.edit_message_text("✅ Вы успешно вышли. Введите /start, чтобы снова войти.")
     return ConversationHandler.END
 
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -444,10 +448,11 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         reg_date_str = user_profile['registration_date'].strftime('%d.%m.%Y')
         message_parts = [
             f"👤 **Личный кабинет** 👤", f"`-------------------------`",
-            f"*Пользователь:*", f"  • **Имя:** `{user_profile['full_name']}`",
-            f"  • **Юзернейм:** `{user_profile['username']}`", f"  • **Статус:** `{user_profile['status'].capitalize()}`",
-            f"\n*Аккаунт:*", f"  • **Контакт:** `{user_profile['contact_info']}`",
-            f"  • **В библиотеке с:** `{reg_date_str}`", f"`-------------------------`",
+            f"🔹 **Имя:** `{user_profile['full_name']}`",
+            f"🔹 **Юзернейм:** `{user_profile['username']}`",
+            f"🔹 **Статус:** `{user_profile['status'].capitalize()}`",
+            f"🔹 **Контакт:** `{user_profile['contact_info']}`",
+            f"🔹 **В библиотеке с:** `{reg_date_str}`", f"`-------------------------`",
             f"📚 **Взятые книги ({len(borrowed_books)}/{borrow_limit})**"
         ]
         if borrowed_books:
@@ -464,7 +469,7 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
     except db_data.NotFoundError:
-        await query.edit_message_text("Не удалось найти ваш профиль. Пожалуйста, войдите снова.")
+        await query.edit_message_text("❌ Не удалось найти ваш профиль. Пожалуйста, войдите снова.")
         context.user_data.clear()
         return await start(update, context)
     return USER_MENU
@@ -476,19 +481,19 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = context.user_data['current_user']['id']
     with get_db_connection() as conn:
         history = db_data.get_user_borrow_history(conn, user_id)
-    message_parts = ["**📜 Ваша история взятых книг 📜**\n"]
+    message_parts = ["**📜 Ваша история взятых книг**\n"]
     if history:
         for item in history:
-            return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "не возвращена"
+            return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "На руках"
             borrow_date_str = item['borrow_date'].strftime('%d.%m.%Y')
             rating_str = ""
             if item['rating']:
                 stars = "⭐" * item['rating']
                 rating_str = f" (ваша оценка: {stars})"
-            message_parts.append(f"- **{item['book_name']}**: взята {borrow_date_str}, возвращена {return_date_str}{rating_str}")
+            message_parts.append(f"📖 **{item['book_name']}**\n   - Взята: `{borrow_date_str}`\n   - Возвращена: `{return_date_str}`{rating_str}")
     else:
         message_parts.append("Вы еще не брали ни одной книги.")
-    keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+    keyboard = [[InlineKeyboardButton("⬅️ Назад в профиль", callback_data="user_profile")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
     return USER_MENU
@@ -507,20 +512,20 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
                 borrowed_books = db_data.get_borrowed_books(conn, user_id)
                 borrow_limit = get_user_borrow_limit(context.user_data['current_user']['status'])
                 if len(borrowed_books) >= borrow_limit:
-                    await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на заимствование.")
+                    await query.edit_message_text(f"⚠️ Вы достигли лимита ({borrow_limit}) на заимствование.")
                     return await user_menu(update, context)
                 db_data.borrow_book(conn, user_id, selected_book['id'])
                 db_data.log_activity(conn, user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}")
-                await query.edit_message_text(f"✅ Книга '{selected_book['name']}' успешно взята.")
+                await query.edit_message_text(f"✅ Книга «{selected_book['name']}» успешно взята.")
                 return await user_menu(update, context)
             else:
                 context.user_data['book_to_reserve'] = selected_book
                 keyboard = [
-                    [InlineKeyboardButton("Да, уведомить меня", callback_data="reserve_yes")],
-                    [InlineKeyboardButton("Нет, спасибо", callback_data="reserve_no")]
+                    [InlineKeyboardButton("✅ Да, уведомить", callback_data="reserve_yes")],
+                    [InlineKeyboardButton("❌ Нет, спасибо", callback_data="reserve_no")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(f"Книга '{selected_book['name']}' временно отсутствует. Хотите зарезервировать?", reply_markup=reply_markup)
+                await query.edit_message_text(f"⏳ Книга «{selected_book['name']}» временно отсутствует. Хотите зарезервировать и получить уведомление, когда она освободится?", reply_markup=reply_markup)
                 return USER_RESERVE_BOOK_CONFIRM
     except (db_data.NotFoundError, IndexError):
         await query.edit_message_text("❌ Ошибка: книга не найдена.")
@@ -534,16 +539,19 @@ async def process_reservation_decision(update: Update, context: ContextTypes.DEF
     await query.answer()
     book_to_reserve = context.user_data.get('book_to_reserve')
     if not book_to_reserve:
-        await query.edit_message_text("Ошибка. Попробуйте снова.")
+        await query.edit_message_text("❌ Ошибка. Попробуйте, пожалуйста, снова.")
         return await user_menu(update, context)
     user_id = context.user_data['current_user']['id']
     if query.data == 'reserve_yes':
         with get_db_connection() as conn:
             result = db_data.add_reservation(conn, user_id, book_to_reserve['id'])
             db_data.log_activity(conn, user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}")
-        await query.edit_message_text(f"✅ {result}")
+        if "уже зарезервировали" in result:
+             await query.edit_message_text(f"⚠️ {result}")
+        else:
+             await query.edit_message_text(f"👍 Вы будете уведомлены, когда книга «{book_to_reserve['name']}» станет доступна.")
     else:
-        await query.edit_message_text("Действие отменено.")
+        await query.edit_message_text("👌 Хорошо, действие отменено.")
     context.user_data.pop('book_to_reserve', None)
     return await user_menu(update, context)
 
@@ -556,9 +564,9 @@ async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not borrowed_books:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("У вас нет взятых книг.", reply_markup=reply_markup)
+        await query.edit_message_text("✅ У вас нет книг на руках.", reply_markup=reply_markup)
         return USER_MENU
-    message_text = "Выберите книгу для возврата:"
+    message_text = "📤 Выберите книгу для возврата:"
     keyboard = []
     context.user_data['borrowed_map'] = {}
     for i, borrowed in enumerate(borrowed_books):
@@ -575,7 +583,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     borrowed_info = context.user_data.get('borrowed_map', {}).get(query.data)
     if not borrowed_info:
-        await query.edit_message_text("Ошибка выбора. Попробуйте снова.")
+        await query.edit_message_text("❌ Ошибка выбора. Попробуйте снова.")
         return await user_menu(update, context)
     book_id = borrowed_info['book_id']
     book_name = borrowed_info['book_name']
@@ -592,11 +600,11 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
                     [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(f"✅ Книга '{book_name}' возвращена. Хотите оценить?", reply_markup=reply_markup)
+                await query.edit_message_text(f"✅ Книга «{book_name}» возвращена. Не хотите ли поставить ей оценку?", reply_markup=reply_markup)
                 reservations = db_data.get_reservations_for_book(conn, book_id)
                 if reservations:
                     user_to_notify_id = reservations[0]
-                    notification_text = f"🎉 Книга '{book_name}', которую вы резервировали, снова в наличии."
+                    notification_text = f"🎉 Книга «{book_name}», которую вы резервировали, снова в наличии."
                     create_and_send_notification.delay(user_id=user_to_notify_id, text=notification_text, category='reservation')
                     db_data.update_reservation_status(conn, user_to_notify_id, book_id, notified=True)
                 return USER_RATE_PROMPT_AFTER_RETURN
@@ -613,7 +621,7 @@ async def initiate_rating_from_return(update: Update, context: ContextTypes.DEFA
     await query.answer()
     returned_book = context.user_data.get('just_returned_book')
     if not returned_book:
-        await query.edit_message_text("Ошибка. Информация о книге потеряна.")
+        await query.edit_message_text("❌ Ошибка. Информация о книге потеряна.")
         return await user_menu(update, context)
     context.user_data['book_to_rate'] = {'id': returned_book['id'], 'name': returned_book['name']}
     return await select_rating(update, context, from_return=True)
@@ -627,9 +635,9 @@ async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not history:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Вы можете оценить только те книги, которые брали.", reply_markup=reply_markup)
+        await query.edit_message_text("📚 Вы можете оценить только те книги, которые брали.", reply_markup=reply_markup)
         return USER_MENU
-    message_text = "Выберите книгу для оценки:"
+    message_text = "⭐ Выберите книгу для оценки:"
     keyboard = []
     context.user_data['rating_map'] = {}
     unique_books = {item['book_name']: item for item in history if 'book_id' in item and item['book_id'] is not None}.values()
@@ -648,15 +656,15 @@ async def select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     if not from_return:
         book_info = context.user_data['rating_map'].get(query.data)
         if not book_info:
-            await query.edit_message_text("Ошибка выбора.")
+            await query.edit_message_text("❌ Ошибка выбора.")
             return await user_menu(update, context)
         context.user_data['book_to_rate'] = book_info
     else:
         book_info = context.user_data.get('book_to_rate')
-    message_text = f"Ваша оценка для книги **'{book_info['book_name']}'** от 1 до 5:"
+    message_text = f"⭐ Ваша оценка для книги «{book_info['book_name']}» (от 1 до 5):"
     rating_buttons = [
-        [InlineKeyboardButton(str(i), callback_data=f"rating_{i}") for i in range(1, 6)],
-        [InlineKeyboardButton("Назад", callback_data="user_rate" if not from_return else "user_menu")]
+        [InlineKeyboardButton("⭐"*i, callback_data=f"rating_{i}") for i in range(1, 6)],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="user_rate" if not from_return else "user_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(rating_buttons)
     await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -676,7 +684,7 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         with get_db_connection() as conn:
             db_data.add_rating(conn, user_id, book_info['book_id'], rating)
             db_data.log_activity(conn, user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
-        message_text = f"✅ Ваша оценка '{rating}' для '{book_info['book_name']}' сохранена."
+        message_text = f"👍 Спасибо! Ваша оценка «{rating}» для книги «{book_info['book_name']}» сохранена."
     except Exception as e:
         message_text = f"❌ Не удалось сохранить: {e}"
     context.user_data.pop('book_to_rate', None)
@@ -695,12 +703,12 @@ async def show_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for notif in notifications:
             date_str = notif['created_at'].strftime('%d.%m.%Y %H:%M')
             status = "⚪️" if notif['is_read'] else "🔵"
-            category_map = {'broadcast': 'Рассылка', 'reservation': 'Резерв', 'system': 'Система'}
+            category_map = {'broadcast': '📢 Рассылка', 'reservation': '📦 Резерв', 'system': '⚙️ Система'}
             category_str = category_map.get(notif['category'], notif['category'].capitalize())
-            message_parts.append(f"`{date_str}`\n{status} **[{category_str}]** {notif['text']}\n")
+            message_parts.append(f"`{date_str}`\n{status} **{category_str}:** {notif['text']}\n")
         message_text = "\n".join(message_parts)
     except db_data.NotFoundError:
-        message_text = "📬 У вас пока нет уведомлений."
+        message_text = "📭 У вас пока нет уведомлений."
     keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -717,14 +725,14 @@ async def ask_delete_self_confirmation(update: Update, context: ContextTypes.DEF
     if borrowed_books:
         keyboard = [[InlineKeyboardButton("⬅️ Назад в профиль", callback_data="user_profile")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Вы не можете удалить аккаунт, пока у вас есть книги на руках.", reply_markup=reply_markup)
+        await query.edit_message_text("❌ Вы не можете удалить аккаунт, пока у вас есть книги на руках.", reply_markup=reply_markup)
         return USER_MENU
     keyboard = [
         [InlineKeyboardButton("✅ Да, я уверен", callback_data="user_confirm_self_delete")],
         [InlineKeyboardButton("❌ Нет, отмена", callback_data="user_profile")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Вы уверены? Это действие невозможно отменить.", reply_markup=reply_markup)
+    await query.edit_message_text("⚠️ **Вы уверены?**\n\nЭто действие невозможно отменить. Все ваши данные будут анонимизированы.", reply_markup=reply_markup, parse_mode='Markdown')
     return USER_DELETE_CONFIRM
 
 async def process_delete_self_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -743,11 +751,11 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
             # Теперь логируем действие С ДЕТАЛЯМИ (username)
             db_data.log_activity(conn, user_id=user_id, action="self_delete_account", details=f"Username: {username}")
             
-            await query.edit_message_text("Ваш аккаунт был удален. Прощайте!")
+            await query.edit_message_text("✅ Ваш аккаунт был удален. Прощайте!")
             context.user_data.clear()
             return ConversationHandler.END
         else:
-            await query.edit_message_text(f"Не удалось удалить: {result}")
+            await query.edit_message_text(f"❌ Не удалось удалить: {result}")
             return await user_menu(update, context)
         
 # --- ФУНКЦИИ РЕДАКТИРОВАНИЯ ПРОФИЛЯ ---
@@ -758,13 +766,13 @@ async def start_profile_edit(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     
     keyboard = [
-        [InlineKeyboardButton("Изменить ФИО", callback_data="edit_field_full_name")],
-        [InlineKeyboardButton("Изменить контакт", callback_data="edit_field_contact_info")],
-        [InlineKeyboardButton("Сменить пароль", callback_data="edit_field_password")],
+        [InlineKeyboardButton("✏️ Изменить ФИО", callback_data="edit_field_full_name")],
+        [InlineKeyboardButton("📞 Изменить контакт", callback_data="edit_field_contact_info")],
+        [InlineKeyboardButton("🔑 Сменить пароль", callback_data="edit_field_password")],
         [InlineKeyboardButton("⬅️ Назад в профиль", callback_data="user_profile")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("Выберите, что вы хотите изменить:", reply_markup=reply_markup)
+    await query.edit_message_text("✏️ Выберите, что вы хотите изменить:", reply_markup=reply_markup)
     return EDIT_PROFILE_MENU
 
 async def select_field_to_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -774,13 +782,13 @@ async def select_field_to_edit(update: Update, context: ContextTypes.DEFAULT_TYP
     field = query.data.split('_')[2]
 
     if field == "full_name":
-        await query.edit_message_text("Введите новое ФИО:")
+        await query.edit_message_text("✏️ Введите новое ФИО:")
         return EDITING_FULL_NAME
     elif field == "contact_info":
-        await query.edit_message_text("Введите новый контакт (email или телефон):")
+        await query.edit_message_text("📞 Введите новый контакт (email или телефон):")
         return EDITING_CONTACT
     elif field == "password":
-        await query.edit_message_text("Для безопасности, введите ваш **текущий** пароль:", parse_mode='Markdown')
+        await query.edit_message_text("🔐 Для безопасности, введите ваш **текущий** пароль:", parse_mode='Markdown')
         return EDITING_PASSWORD_CURRENT
 
 async def process_full_name_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -789,14 +797,9 @@ async def process_full_name_edit(update: Update, context: ContextTypes.DEFAULT_T
     user_id = context.user_data['current_user']['id']
     with get_db_connection() as conn:
         db_data.update_user_full_name(conn, user_id, new_name)
-        # Обновляем данные в сессии
         context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
-
     await update.message.reply_text("✅ ФИО успешно обновлено!")
-    # Имитируем нажатие на кнопку "Профиль", чтобы показать обновленные данные
-    query_data = "user_profile"
-    update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
-    await view_profile(update, context)
+    context.user_data['just_edited_profile'] = True
     return ConversationHandler.END
 
 async def process_contact_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -810,11 +813,8 @@ async def process_contact_edit(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("✅ Контакт успешно обновлен!")
     except db_data.UserExistsError:
         await update.message.reply_text("❌ Этот контакт уже занят. Попробуйте другой.")
-        return EDITING_CONTACT # Остаемся в том же состоянии
-    
-    query_data = "user_profile"
-    update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
-    await view_profile(update, context)
+        return EDITING_CONTACT
+    context.user_data['just_edited_profile'] = True
     return ConversationHandler.END
 
 async def check_current_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -823,7 +823,7 @@ async def check_current_password(update: Update, context: ContextTypes.DEFAULT_T
     stored_hash = context.user_data['current_user']['password_hash']
     
     if hash_password(current_password_input) == stored_hash:
-        await update.message.reply_text("Пароль верный. Теперь введите **новый** пароль:", parse_mode='Markdown')
+        await update.message.reply_text("✅ Пароль верный. Теперь введите **новый** пароль:", parse_mode='Markdown')
         return EDITING_PASSWORD_NEW
     else:
         await update.message.reply_text("❌ Неверный пароль. Попробуйте еще раз или нажмите /cancel для отмены.")
@@ -836,7 +836,7 @@ async def get_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("❌ Пароль должен быть не менее 8 символов. Попробуйте снова.")
         return EDITING_PASSWORD_NEW
     context.user_data['new_password_temp'] = new_password
-    await update.message.reply_text("Отлично. Повторите **новый** пароль для подтверждения:", parse_mode='Markdown')
+    await update.message.reply_text("👍 Отлично. Повторите **новый** пароль для подтверждения:", parse_mode='Markdown')
     return EDITING_PASSWORD_CONFIRM
 
 async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -853,10 +853,8 @@ async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEF
         db_data.update_user_password_by_id(conn, user_id, new_password)
         context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
 
-    await update.message.reply_text("✅ Пароль успешно изменен!")
-    query_data = "user_profile"
-    update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
-    await view_profile(update, context)
+    await update.message.reply_text("🎉 Пароль успешно изменен!")
+    context.user_data['just_edited_profile'] = True
     return ConversationHandler.END
 
 async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -869,20 +867,19 @@ async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     if not genres:
         await query.edit_message_text(
-            "К сожалению, в каталоге пока нет книг с указанием жанра.",
+            "😔 К сожалению, в каталоге пока нет книг с указанием жанра.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]])
         )
         return USER_MENU
 
     keyboard = []
     for genre in genres:
-        keyboard.append([InlineKeyboardButton(genre, callback_data=f"genre_{genre}")])
+        keyboard.append([InlineKeyboardButton(f"🎭 {genre}", callback_data=f"genre_{genre}")])
     
-    # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
     keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text("Выберите интересующий вас жанр:", reply_markup=reply_markup)
+    await query.edit_message_text("📚 Выберите интересующий вас жанр:", reply_markup=reply_markup)
     return SHOWING_GENRES
 
 
@@ -901,9 +898,9 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
         books, total_books = db_data.get_available_books_by_genre(conn, genre, limit=books_per_page, offset=offset)
 
     if total_books == 0:
-        message_text = f"В жанре '{genre}' свободных книг не найдено."
+        message_text = f"😔 В жанре «{genre}» свободных книг не найдено."
     else:
-        message_parts = [f"📚 **Книги в жанре '{genre}'** (Стр. {page + 1}):\n"]
+        message_parts = [f"**📚 Книги в жанре «{genre}»** (Стр. {page + 1}):\n"]
         for book in books:
             message_parts.append(f"• *{book['name']}* ({book['author']})")
         message_text = "\n".join(message_parts)
@@ -920,14 +917,14 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
-    return SHOWING_GENRE_BOOKS
+    return SHOWING_GENRES
 
 async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог поиска книги по ключевому слову."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        text="Введите название книги или фамилию автора для поиска:",
+        text="🔎 Введите название книги или фамилию автора для поиска:",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]])
     )
     return GETTING_SEARCH_QUERY
@@ -956,7 +953,7 @@ async def navigate_search_results(update: Update, context: ContextTypes.DEFAULT_
     search_term = context.user_data.get('last_search_term')
 
     if not search_term:
-        await query.edit_message_text("Ошибка: поисковый запрос потерян. Попробуйте снова.")
+        await query.edit_message_text("❌ Ошибка: поисковый запрос потерян. Попробуйте снова.")
         return await user_menu(update, context)
 
     books_per_page = 5
@@ -967,7 +964,7 @@ async def navigate_search_results(update: Update, context: ContextTypes.DEFAULT_
 
     if total_books == 0:
          await query.edit_message_text(
-            text=f"По запросу '{search_term}' ничего не найдено.",
+            text=f"😔 По запросу «{search_term}» ничего не найдено.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Попробовать еще раз", callback_data="search_book")],
                 [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
@@ -975,7 +972,7 @@ async def navigate_search_results(update: Update, context: ContextTypes.DEFAULT_
         )
          return USER_MENU
 
-    message_text = f"Результаты по запросу '{search_term}' (Стр. {page + 1}):"
+    message_text = f"🔎 Результаты по запросу «{search_term}» (Стр. {page + 1}):"
     keyboard = []
     for book in books:
         keyboard.append([InlineKeyboardButton(f"📖 {book['name']} ({book['author']})", callback_data=f"view_book_{book['id']}")])
@@ -1014,10 +1011,10 @@ async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     keyboard = []
     if book['is_available']:
-        message_parts.append("🟢 **Статус:** Свободна")
+        message_parts.append("✅ **Статус:** Свободна")
         keyboard.append([InlineKeyboardButton("✅ Взять эту книгу", callback_data=f"borrow_book_{book['id']}")])
     else:
-        message_parts.append("🔴 **Статус:** На руках у другого читателя")
+        message_parts.append("❌ **Статус:** На руках")
 
     # --- УЛУЧШЕННАЯ КЛАВИАТУРА ---
     keyboard.extend([
@@ -1164,7 +1161,7 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states=main_conv_states,
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CommandHandler("start", start), CommandHandler("cancel", cancel)],
     )
 
     application.add_handler(conv_handler)

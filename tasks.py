@@ -20,9 +20,9 @@ celery_app = Celery(
 # --- Инициализация API бота-уведомителя ---
 try:
     notifier_bot = telegram.Bot(token=os.getenv("NOTIFICATION_BOT_TOKEN"))
-    print("✅ Notifier Bot API initialized for Celery.")
+    print("✅ API бота-уведомителя для Celery успешно инициализировано.")
 except Exception as e:
-    print(f"❌ Failed to initialize Notifier Bot API for Celery: {e}")
+    print(f"❌ Не удалось инициализировать API бота-уведомителя для Celery: {e}")
     notifier_bot = None
 
 # --- НОВАЯ УМНАЯ ЗАДАЧА ---
@@ -34,15 +34,15 @@ def send_telegram_message(telegram_id: int, message: str):
     Используется для отправки кодов верификации до того, как создан user_id.
     """
     if not notifier_bot:
-        print(f"❌ Notifier bot is not available. Cannot send message to {telegram_id}")
+        print(f"❌ Бот-уведомитель недоступен. Невозможно отправить сообщение для {telegram_id}")
         return
     try:
         notifier_bot.send_message(chat_id=telegram_id, text=message)
-        print(f"✅ Directly sent message to {telegram_id}.")
+        print(f"✅ Прямое сообщение успешно отправлено для {telegram_id}.")
     except telegram.error.TelegramError as e:
-        print(f"❌ Error sending direct message to {telegram_id}: {e}")
+        print(f"❌ Ошибка при отправке прямого сообщения для {telegram_id}: {e}")
     except Exception as e:
-        print(f"❌ An unexpected error occurred in send_telegram_message: {e}")
+        print(f"❌ Произошла непредвиденная ошибка в задаче send_telegram_message: {e}")
 
 @celery_app.task
 def create_and_send_notification(user_id: int, text: str, category: str):
@@ -50,7 +50,7 @@ def create_and_send_notification(user_id: int, text: str, category: str):
     Главная задача: сохраняет уведомление в БД и отправляет его пользователю.
     """
     if not notifier_bot:
-        print(f"❌ Notifier bot is not available. Cannot process notification for user {user_id}")
+        print(f"❌ Бот-уведомитель недоступен. Невозможно обработать уведомление для пользователя {user_id}")
         return
 
     try:
@@ -63,15 +63,15 @@ def create_and_send_notification(user_id: int, text: str, category: str):
         
         # 3. Отправляем сообщение
         notifier_bot.send_message(chat_id=telegram_id, text=text, parse_mode='Markdown')
-        print(f"✅ Notification for user {user_id} saved and sent to {telegram_id}.")
+        print(f"✅ Уведомление для пользователя {user_id} сохранено и отправлено на {telegram_id}.")
 
     except db_data.NotFoundError as e:
-        print(f"❌ Error processing notification for user {user_id}: {e}")
+        print(f"❌ Ошибка при обработке уведомления для пользователя {user_id}: {e}")
     except telegram.error.TelegramError as e:
         # Мы не можем получить telegram_id здесь, если он не был получен ранее
-        print(f"❌ Error sending notification to user {user_id}: {e}")
+        print(f"❌ Ошибка при отправке уведомления для пользователя {user_id}: {e}")
     except Exception as e:
-        print(f"❌ An unexpected error occurred in create_and_send_notification: {e}")
+        print(f"❌ Произошла непредвиденная ошибка в задаче create_and_send_notification: {e}")
 
 
 # ... (остальные задачи, такие как check_due_dates_and_notify, остаются без изменений) ...
