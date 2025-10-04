@@ -50,8 +50,13 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     USER_RESERVE_BOOK_CONFIRM,
     USER_VIEW_HISTORY, USER_NOTIFICATIONS,
     SHOWING_GENRES, SHOWING_GENRE_BOOKS,
-    GETTING_SEARCH_QUERY, SHOWING_SEARCH_RESULTS
-) = range(29)
+    GETTING_SEARCH_QUERY, SHOWING_SEARCH_RESULTS,
+
+    # --- Новые состояния для редактирования профиля ---
+    EDIT_PROFILE_MENU, EDITING_FULL_NAME, EDITING_CONTACT,
+    EDITING_PASSWORD_CURRENT, EDITING_PASSWORD_NEW, EDITING_PASSWORD_CONFIRM
+
+) = range(35)
 
 
 # --------------------------
@@ -102,6 +107,24 @@ def get_back_button(current_state_const: int) -> list:
     """Генерирует кнопку 'Назад', используя имя константы состояния."""
     state_name = [name for name, val in globals().items() if val == current_state_const and name.isupper() and '_' in name][0]
     return [InlineKeyboardButton("⬅️ Назад", callback_data=f"back_{state_name}")]
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обработчик команды /cancel. 
+    Используется как fallback для выхода из вложенного ConversationHandler.
+    """
+    if update.message:
+        message = update.message
+        # Отправка сообщения пользователю
+        await message.reply_text("❌ Действие отменено. Возвращаемся в меню.")
+        
+    elif update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        # Редактирование или отправка нового сообщения (зависит от контекста)
+        await query.edit_message_text("❌ Действие отменено. Возвращаемся в меню.")
+    
+    return ConversationHandler.END
 
 # --------------------------
 # --- ОСНОВНЫЕ ОБРАБОТЧИКИ ---
@@ -433,6 +456,7 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         else:
             message_parts.append("  _У вас нет активных займов._")
         keyboard = [
+            [InlineKeyboardButton("✏️ Редактировать профиль", callback_data="edit_profile")],
             [InlineKeyboardButton("📜 Перейти к истории", callback_data="user_history")],
             [InlineKeyboardButton("🗑️ Удалить аккаунт", callback_data="user_delete_account")],
             [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
@@ -725,6 +749,115 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
         else:
             await query.edit_message_text(f"Не удалось удалить: {result}")
             return await user_menu(update, context)
+        
+# --- ФУНКЦИИ РЕДАКТИРОВАНИЯ ПРОФИЛЯ ---
+
+async def start_profile_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Входная точка для редактирования профиля. Показывает меню."""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("Изменить ФИО", callback_data="edit_field_full_name")],
+        [InlineKeyboardButton("Изменить контакт", callback_data="edit_field_contact_info")],
+        [InlineKeyboardButton("Сменить пароль", callback_data="edit_field_password")],
+        [InlineKeyboardButton("⬅️ Назад в профиль", callback_data="user_profile")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("Выберите, что вы хотите изменить:", reply_markup=reply_markup)
+    return EDIT_PROFILE_MENU
+
+async def select_field_to_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает выбор поля и запрашивает новые данные."""
+    query = update.callback_query
+    await query.answer()
+    field = query.data.split('_')[2]
+
+    if field == "full_name":
+        await query.edit_message_text("Введите новое ФИО:")
+        return EDITING_FULL_NAME
+    elif field == "contact_info":
+        await query.edit_message_text("Введите новый контакт (email или телефон):")
+        return EDITING_CONTACT
+    elif field == "password":
+        await query.edit_message_text("Для безопасности, введите ваш **текущий** пароль:", parse_mode='Markdown')
+        return EDITING_PASSWORD_CURRENT
+
+async def process_full_name_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обновляет ФИО пользователя."""
+    new_name = update.message.text
+    user_id = context.user_data['current_user']['id']
+    with get_db_connection() as conn:
+        db_data.update_user_full_name(conn, user_id, new_name)
+        # Обновляем данные в сессии
+        context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
+
+    await update.message.reply_text("✅ ФИО успешно обновлено!")
+    # Имитируем нажатие на кнопку "Профиль", чтобы показать обновленные данные
+    query_data = "user_profile"
+    update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
+    await view_profile(update, context)
+    return ConversationHandler.END
+
+async def process_contact_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обновляет контакт пользователя."""
+    new_contact = normalize_phone_number(update.message.text)
+    user_id = context.user_data['current_user']['id']
+    try:
+        with get_db_connection() as conn:
+            db_data.update_user_contact(conn, user_id, new_contact)
+            context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
+        await update.message.reply_text("✅ Контакт успешно обновлен!")
+    except db_data.UserExistsError:
+        await update.message.reply_text("❌ Этот контакт уже занят. Попробуйте другой.")
+        return EDITING_CONTACT # Остаемся в том же состоянии
+    
+    query_data = "user_profile"
+    update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
+    await view_profile(update, context)
+    return ConversationHandler.END
+
+async def check_current_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Проверяет текущий пароль пользователя."""
+    current_password_input = update.message.text
+    stored_hash = context.user_data['current_user']['password_hash']
+    
+    if hash_password(current_password_input) == stored_hash:
+        await update.message.reply_text("Пароль верный. Теперь введите **новый** пароль:", parse_mode='Markdown')
+        return EDITING_PASSWORD_NEW
+    else:
+        await update.message.reply_text("❌ Неверный пароль. Попробуйте еще раз или нажмите /cancel для отмены.")
+        return EDITING_PASSWORD_CURRENT
+
+async def get_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Получает новый пароль."""
+    new_password = update.message.text
+    if len(new_password) < 8:
+        await update.message.reply_text("❌ Пароль должен быть не менее 8 символов. Попробуйте снова.")
+        return EDITING_PASSWORD_NEW
+    context.user_data['new_password_temp'] = new_password
+    await update.message.reply_text("Отлично. Повторите **новый** пароль для подтверждения:", parse_mode='Markdown')
+    return EDITING_PASSWORD_CONFIRM
+
+async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждает и устанавливает новый пароль."""
+    confirm_password = update.message.text
+    if confirm_password != context.user_data.get('new_password_temp'):
+        await update.message.reply_text("❌ Пароли не совпадают. Попробуйте ввести новый пароль еще раз.")
+        return EDITING_PASSWORD_NEW
+    
+    user_id = context.user_data['current_user']['id']
+    new_password = context.user_data.pop('new_password_temp')
+    
+    with get_db_connection() as conn:
+        db_data.update_user_password_by_id(conn, user_id, new_password)
+        context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
+
+    await update.message.reply_text("✅ Пароль успешно изменен!")
+    query_data = "user_profile"
+    update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
+    await view_profile(update, context)
+    return ConversationHandler.END
 
 async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Показывает пользователю список жанров и переходит в состояние выбора."""
@@ -923,93 +1056,116 @@ async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    edit_profile_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_profile_edit, pattern="^edit_profile$")],
+        states={
+            EDIT_PROFILE_MENU: [
+                CallbackQueryHandler(select_field_to_edit, pattern="^edit_field_")
+            ],
+            EDITING_FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_full_name_edit)],
+            EDITING_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_contact_edit)],
+            EDITING_PASSWORD_CURRENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_current_password)],
+            EDITING_PASSWORD_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_new_password)],
+            EDITING_PASSWORD_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_and_set_new_password)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(view_profile, pattern="^user_profile$")
+        ],
+        map_to_parent={
+            ConversationHandler.END: USER_MENU,
+        }
+    )
+
+    main_conv_states = {
+        START_ROUTES: [
+            CallbackQueryHandler(start_registration, pattern="^register$"),
+            CallbackQueryHandler(start_login, pattern="^login$"),
+        ],
+        REGISTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+        REGISTER_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
+        REGISTER_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
+        REGISTER_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_registration_code)],
+        REGISTER_STATUS: [CallbackQueryHandler(get_status, pattern=r"^(студент|учитель)$")],
+        REGISTER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
+        REGISTER_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
+        REGISTER_CONFIRM_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password_confirmation)],
+        LOGIN_CONTACT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, get_login_contact),
+            CallbackQueryHandler(start_forgot_password, pattern="^forgot_password$")
+        ],
+        LOGIN_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_login_password)],
+        FORGOT_PASSWORD_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_forgot_password_contact)],
+        FORGOT_PASSWORD_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_forgot_password_code)],
+        FORGOT_PASSWORD_SET_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_new_password)],
+        FORGOT_PASSWORD_CONFIRM_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_new_password)],
+        USER_MENU: [
+            CallbackQueryHandler(start_return_book, pattern="^user_return$"),
+            CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
+            CallbackQueryHandler(view_profile, pattern="^user_profile$"),
+            CallbackQueryHandler(view_borrow_history, pattern="^user_history$"),
+            CallbackQueryHandler(show_notifications, pattern="^user_notifications$"),
+            CallbackQueryHandler(ask_delete_self_confirmation, pattern="^user_delete_account$"),
+            CallbackQueryHandler(logout, pattern="^logout$"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$"),
+            CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
+            CallbackQueryHandler(start_search, pattern="^search_book$"),
+            edit_profile_handler, 
+        ],
+        USER_BORROW_BOOK_SELECT: [
+            CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        USER_RESERVE_BOOK_CONFIRM: [CallbackQueryHandler(process_reservation_decision, pattern=r"^reserve_(yes|no)$")],
+        USER_RETURN_BOOK: [
+            CallbackQueryHandler(process_return_book, pattern=r"^return_\d+$"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        USER_RATE_PROMPT_AFTER_RETURN: [
+            CallbackQueryHandler(initiate_rating_from_return, pattern="^rate_after_return$"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        USER_RATE_BOOK_SELECT: [
+            CallbackQueryHandler(select_rating, pattern=r"^rate_\d+$"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        USER_RATE_BOOK_RATING: [
+            CallbackQueryHandler(process_rating, pattern=r"^rating_\d+$"),
+            CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$"),
+        ],
+        USER_DELETE_CONFIRM: [
+            CallbackQueryHandler(process_delete_self_confirmation, pattern="^user_confirm_self_delete$"),
+            CallbackQueryHandler(view_profile, pattern="^user_profile$"),
+        ],
+        SHOWING_GENRES: [
+            CallbackQueryHandler(show_books_in_genre, pattern=r"^genre_"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        SHOWING_GENRE_BOOKS: [
+            CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        GETTING_SEARCH_QUERY: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, process_search_query),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        SHOWING_SEARCH_RESULTS: [
+            CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
+            CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"), 
+            CallbackQueryHandler(start_search, pattern="^search_book$"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$"),
+            CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
+        ],
+    }
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
-        states={
-            START_ROUTES: [
-                CallbackQueryHandler(start_registration, pattern="^register$"),
-                CallbackQueryHandler(start_login, pattern="^login$"),
-            ],
-            REGISTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            REGISTER_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
-            REGISTER_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
-            REGISTER_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_registration_code)],
-            REGISTER_STATUS: [CallbackQueryHandler(get_status, pattern=r"^(студент|учитель)$")],
-            REGISTER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
-            REGISTER_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
-            REGISTER_CONFIRM_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password_confirmation)],
-            LOGIN_CONTACT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_login_contact),
-                CallbackQueryHandler(start_forgot_password, pattern="^forgot_password$")
-            ],
-            LOGIN_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_login_password)],
-            FORGOT_PASSWORD_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_forgot_password_contact)],
-            FORGOT_PASSWORD_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_forgot_password_code)],
-            FORGOT_PASSWORD_SET_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_new_password)],
-            FORGOT_PASSWORD_CONFIRM_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_new_password)],
-            USER_MENU: [
-                CallbackQueryHandler(start_return_book, pattern="^user_return$"),
-                CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
-                CallbackQueryHandler(view_profile, pattern="^user_profile$"),
-                CallbackQueryHandler(view_borrow_history, pattern="^user_history$"),
-                CallbackQueryHandler(show_notifications, pattern="^user_notifications$"),
-                CallbackQueryHandler(ask_delete_self_confirmation, pattern="^user_delete_account$"),
-                CallbackQueryHandler(logout, pattern="^logout$"),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$"),
-                CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
-                CallbackQueryHandler(start_search, pattern="^search_book$"),
-            ],
-            USER_BORROW_BOOK_SELECT: [
-                CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$")
-            ],
-            USER_RESERVE_BOOK_CONFIRM: [CallbackQueryHandler(process_reservation_decision, pattern=r"^reserve_(yes|no)$")],
-            USER_RETURN_BOOK: [
-                CallbackQueryHandler(process_return_book, pattern=r"^return_\d+$"),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$")
-            ],
-            USER_RATE_PROMPT_AFTER_RETURN: [
-                CallbackQueryHandler(initiate_rating_from_return, pattern="^rate_after_return$"),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$")
-            ],
-            USER_RATE_BOOK_SELECT: [
-                CallbackQueryHandler(select_rating, pattern=r"^rate_\d+$"),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$")
-            ],
-            USER_RATE_BOOK_RATING: [
-                CallbackQueryHandler(process_rating, pattern=r"^rating_\d+$"),
-                CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$"),
-            ],
-            USER_DELETE_CONFIRM: [
-                CallbackQueryHandler(process_delete_self_confirmation, pattern="^user_confirm_self_delete$"),
-                CallbackQueryHandler(view_profile, pattern="^user_profile$"),
-            ],
-            SHOWING_GENRES: [
-                CallbackQueryHandler(show_books_in_genre, pattern=r"^genre_"),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$") # Обработка кнопки "Назад в меню"
-            ],
-            SHOWING_GENRE_BOOKS: [
-                CallbackQueryHandler(show_genres, pattern="^find_by_genre$"), # Обработка кнопки "Назад к жанрам"
-                CallbackQueryHandler(user_menu, pattern="^user_menu$")
-            ],
-            GETTING_SEARCH_QUERY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_search_query),
-                CallbackQueryHandler(user_menu, pattern="^user_menu$")
-            ],
-            SHOWING_SEARCH_RESULTS: [
-                CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
-                # Позволяем взять книгу прямо из карточки
-                CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"), 
-                # Кнопка "Назад к поиску"
-                CallbackQueryHandler(start_search, pattern="^search_book$"),
-                # Кнопка "Назад в меню"
-                CallbackQueryHandler(user_menu, pattern="^user_menu$"),
-                CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
-            ],
-        },
+        states=main_conv_states,
         fallbacks=[CommandHandler("start", start)],
     )
+
     application.add_handler(conv_handler)
     application.run_polling()
 

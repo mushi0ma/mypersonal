@@ -601,3 +601,32 @@ def get_book_card_details(conn, book_id: int):
         # 3. Добавляем статус доступности
         book_details['is_available'] = not is_borrowed
         return book_details
+    
+def update_user_full_name(conn, user_id: int, new_name: str):
+    """Обновляет ФИО пользователя."""
+    with conn.cursor() as cur:
+        cur.execute("UPDATE users SET full_name = %s WHERE id = %s", (new_name, user_id))
+        if cur.rowcount == 0:
+            raise NotFoundError("Пользователь не найден для обновления ФИО.")
+    return True
+
+def update_user_contact(conn, user_id: int, new_contact: str):
+    """Обновляет контактную информацию пользователя."""
+    with conn.cursor() as cur:
+        try:
+            cur.execute("UPDATE users SET contact_info = %s WHERE id = %s", (new_contact, user_id))
+            if cur.rowcount == 0:
+                raise NotFoundError("Пользователь не найден для обновления контакта.")
+        except psycopg2.IntegrityError:
+            conn.rollback()
+            raise UserExistsError("Этот контакт уже занят другим пользователем.")
+    return True
+
+def update_user_password_by_id(conn, user_id: int, new_password: str):
+    """Обновляет пароль пользователя по его ID."""
+    hashed_pass = hash_password(new_password)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hashed_pass, user_id))
+        if cur.rowcount == 0:
+            raise NotFoundError("Пользователь не найден для обновления пароля.")
+    return True
