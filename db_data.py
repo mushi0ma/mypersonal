@@ -496,60 +496,81 @@ def get_unique_genres(conn):
         genres = [row[0] for row in cur.fetchall()]
     return genres
 
-def get_available_books_by_genre(conn, genre: str):
-    """Возвращает список свободных книг указанного жанра."""
+def get_available_books_by_genre(conn, genre: str, limit: int, offset: int):
+    """Возвращает порцию свободных книг указанного жанра и их общее количество."""
     with conn.cursor() as cur:
-        # Находим ID книг, которые сейчас на руках
+        # 1. Находим ID книг, которые сейчас на руках
         cur.execute("SELECT book_id FROM borrowed_books WHERE return_date IS NULL")
         borrowed_ids = {row[0] for row in cur.fetchall()}
+        borrowed_ids_tuple = tuple(borrowed_ids) if borrowed_ids else (None,)
 
-        # Выбираем книги нужного жанра, которых нет в списке "на руках"
-        cur.execute("SELECT id, name, author FROM books WHERE genre = %s ORDER BY name", (genre,))
-        all_books_in_genre = cur.fetchall()
-        
-        available_books = []
-        columns = [desc[0] for desc in cur.description]
-        for book_row in all_books_in_genre:
-            book_dict = dict(zip(columns, book_row))
-            if book_dict['id'] not in borrowed_ids:
-                available_books.append(book_dict)
-                
-    return available_books
+        # 2. Считаем общее количество доступных книг в жанре
+        cur.execute(
+            "SELECT COUNT(*) FROM books WHERE genre = %s AND id NOT IN %s",
+            (genre, borrowed_ids_tuple)
+        )
+        total_books = cur.fetchone()[0]
 
-def search_available_books(conn, search_term: str):
-    """
-    Ищет ДОСТУПНЫЕ книги по части названия или автора (регистронезависимо).
-    Эта функция специально для пользовательского поиска.
-    """
-    with conn.cursor() as cur:
-        # 1. Получаем ID всех книг, которые сейчас на руках
-        cur.execute("SELECT book_id FROM borrowed_books WHERE return_date IS NULL")
-        borrowed_ids = {row[0] for row in cur.fetchall()}
-
-        # 2. Ищем все книги, подходящие под запрос
-        search_pattern = f"%{search_term}%"
+        # 3. Получаем порцию книг для текущей страницы
         cur.execute(
             """
             SELECT b.id, b.name, a.name as author
             FROM books b
             JOIN authors a ON b.author_id = a.id
-            WHERE b.name ILIKE %s OR a.name ILIKE %s
+            WHERE b.genre = %s AND b.id NOT IN %s
             ORDER BY b.name
+            LIMIT %s OFFSET %s
             """,
-            (search_pattern, search_pattern)
+            (genre, borrowed_ids_tuple, limit, offset)
+        )
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        books_on_page = [dict(zip(columns, row)) for row in rows]
+
+    return books_on_page, total_books
+
+def search_available_books(conn, search_term: str, limit: int, offset: int):
+    """
+    Ищет ДОСТУПНЫЕ книги по части названия или автора (с пагинацией).
+    """
+    with conn.cursor() as cur:
+        # 1. Получаем ID всех книг, которые сейчас на руках
+        cur.execute("SELECT book_id FROM borrowed_books WHERE return_date IS NULL")
+        borrowed_ids = {row[0] for row in cur.fetchall()}
+        borrowed_ids_tuple = tuple(borrowed_ids) if borrowed_ids else (None,)
+        
+        search_pattern = f"%{search_term}%"
+
+        # 2. Считаем общее количество
+        cur.execute(
+            """
+            SELECT COUNT(b.id) 
+            FROM books b 
+            JOIN authors a ON b.author_id = a.id 
+            WHERE (b.name ILIKE %s OR a.name ILIKE %s) AND b.id NOT IN %s
+            """,
+            (search_pattern, search_pattern, borrowed_ids_tuple)
+        )
+        total_books = cur.fetchone()[0]
+
+        # 3. Получаем порцию для страницы
+        cur.execute(
+            """
+            SELECT b.id, b.name, a.name as author
+            FROM books b
+            JOIN authors a ON b.author_id = a.id
+            WHERE (b.name ILIKE %s OR a.name ILIKE %s) AND b.id NOT IN %s
+            ORDER BY b.name
+            LIMIT %s OFFSET %s
+            """,
+            (search_pattern, search_pattern, borrowed_ids_tuple, limit, offset)
         )
         
-        all_found_books_rows = cur.fetchall()
+        rows = cur.fetchall()
         columns = [desc[0] for desc in cur.description]
-        
-        # 3. Фильтруем результаты, оставляя только те, которых нет в списке взятых
-        available_books = []
-        for row in all_found_books_rows:
-            book = dict(zip(columns, row))
-            if book['id'] not in borrowed_ids:
-                available_books.append(book)
+        books_on_page = [dict(zip(columns, row)) for row in rows]
                 
-    return available_books
+    return books_on_page, total_books
 
 def get_book_card_details(conn, book_id: int):
     """

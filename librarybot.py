@@ -753,29 +753,41 @@ async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return SHOWING_GENRES
 
 
-async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает список доступных книг в выбранном жанре."""
+async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает постраничный список доступных книг в выбранном жанре."""
     query = update.callback_query
     await query.answer()
     
-    # Извлекаем жанр из callback_data. Пример: "genre_Фантастика"
-    genre = query.data.split('_', 1)[1]
+    parts = query.data.split('_')
+    genre = parts[1]
+    page = int(parts[2]) if len(parts) > 2 else 0
+    books_per_page = 5
+    offset = page * books_per_page
 
     with get_db_connection() as conn:
-        books = db_data.get_available_books_by_genre(conn, genre)
+        books, total_books = db_data.get_available_books_by_genre(conn, genre, limit=books_per_page, offset=offset)
 
-    if not books:
+    if total_books == 0:
         message_text = f"В жанре '{genre}' свободных книг не найдено."
     else:
-        message_parts = [f"📚 **Книги в жанре '{genre}':**\n"]
+        message_parts = [f"📚 **Книги в жанре '{genre}'** (Стр. {page + 1}):\n"]
         for book in books:
             message_parts.append(f"• *{book['name']}* ({book['author']})")
         message_text = "\n".join(message_parts)
     
-    keyboard = [[InlineKeyboardButton("⬅️ Назад к выбору жанра", callback_data="find_by_genre")]]
+    # --- Кнопки навигации ---
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"genre_{genre}_{page - 1}"))
+    if (page + 1) * books_per_page < total_books:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"genre_{genre}_{page + 1}"))
+
+    keyboard = [nav_buttons] if nav_buttons else []
+    keyboard.append([InlineKeyboardButton("⬅️ К выбору жанра", callback_data="find_by_genre")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
+    return SHOWING_GENRE_BOOKS
 
 async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог поиска книги по ключевому слову."""
@@ -788,30 +800,67 @@ async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return GETTING_SEARCH_QUERY
 
 async def process_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ищет книги по запросу пользователя и показывает результаты."""
+    """Ищет книги, показывает первую страницу результатов и сохраняет запрос."""
     search_term = update.message.text
+    context.user_data['last_search_term'] = search_term # Сохраняем для пагинации
     
-    with get_db_connection() as conn:
-        books = db_data.search_available_books(conn, search_term)
+    # Вызываем новую функцию для навигации, чтобы не дублировать код
+    # Имитируем callback_query для первой страницы
+    query_data = "search_page_0"
+    update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
+    
+    # Удаляем сообщение пользователя с поисковым запросом для чистоты
+    await update.message.delete()
 
-    if not books:
-        await update.message.reply_text(
+    return await navigate_search_results(update, context)
+
+async def navigate_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает навигацию по страницам результатов поиска по слову."""
+    query = update.callback_query
+    await query.answer()
+
+    page = int(query.data.split('_')[2])
+    search_term = context.user_data.get('last_search_term')
+
+    if not search_term:
+        await query.edit_message_text("Ошибка: поисковый запрос потерян. Попробуйте снова.")
+        return await user_menu(update, context)
+
+    books_per_page = 5
+    offset = page * books_per_page
+
+    with get_db_connection() as conn:
+        books, total_books = db_data.search_available_books(conn, search_term, limit=books_per_page, offset=offset)
+
+    if total_books == 0:
+         await query.edit_message_text(
             text=f"По запросу '{search_term}' ничего не найдено.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Попробовать еще раз", callback_data="search_book")],
-                [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
+                [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
             ])
         )
-        return USER_MENU 
+         return USER_MENU
 
+    message_text = f"Результаты по запросу '{search_term}' (Стр. {page + 1}):"
     keyboard = []
     for book in books:
         keyboard.append([InlineKeyboardButton(f"📖 {book['name']} ({book['author']})", callback_data=f"view_book_{book['id']}")])
     
-    keyboard.append([InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")])
+    # Кнопки навигации
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"search_page_{page - 1}"))
+    if (page + 1) * books_per_page < total_books:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"search_page_{page + 1}"))
+    
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    keyboard.append([InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text("Вот что удалось найти:", reply_markup=reply_markup)
+    await query.edit_message_text(message_text, reply_markup=reply_markup)
     return SHOWING_SEARCH_RESULTS
 
 async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -909,6 +958,7 @@ def main() -> None:
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),
                 CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
                 CallbackQueryHandler(start_search, pattern="^search_book$"),
+                CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
             ],
             USER_BORROW_BOOK_SELECT: [
                 CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
