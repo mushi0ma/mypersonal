@@ -19,7 +19,7 @@ from telegram.ext import (
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import db_data
 from db_utils import hash_password
-from tasks import send_telegram_message
+from tasks import create_and_send_notification, send_telegram_message
 
 # --- ИМПОРТ СЕРВИСОВ ---
 from twilio.rest import Client
@@ -62,8 +62,8 @@ FROM_EMAIL = os.getenv("FROM_EMAIL")
     USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN,
     USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING, USER_DELETE_CONFIRM,
     USER_RESERVE_BOOK_CONFIRM,
-    USER_VIEW_HISTORY
-) = range(25)
+    USER_VIEW_HISTORY, USER_NOTIFICATIONS
+) = range(26)
 
 
 # --------------------------
@@ -85,8 +85,10 @@ def send_whatsapp_code(contact: str, code: str):
     return False
 
 async def send_local_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> bool:
+    """Отправляет код верификации через Celery (старый метод, т.к. user_id еще нет)."""
     try:
         message_body = f"Ваш код для библиотеки: {code}"
+        # Для верификации при регистрации используем старую задачу, т.к. user_id еще не создан
         send_telegram_message.delay(telegram_id, message_body)
         context.user_data['verification_method'] = 'telegram_notifier'
         return True
@@ -238,18 +240,14 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
     await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
     if context.user_data['registration'].get('password_temp') != password_confirm:
         await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, создайте пароль заново.")
-        # This is a bit tricky, we need to re-ask for the username to restart the password flow cleanly
-        # A simple re-ask for password might be better, but this is more robust
-        temp_update_for_reask = update
-        temp_update_for_reask.message.text = context.user_data['registration']['username']
-        return await get_username(temp_update_for_reask, context)
-
+        return await get_username(update, context) # Re-ask previous step for better UX
     context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
     user_info = update.message.from_user
     context.user_data['registration']['telegram_id'] = user_info.id
     context.user_data['registration']['telegram_username'] = user_info.username if user_info.username else None
     try:
         user_id = db_data.add_user(context.user_data['registration'])
+        db_data.log_activity(user_id=user_id, action="registration")
         await update.message.reply_text("✅ Регистрация успешно завершена! Теперь вы можете войти, используя /start.")
     except db_data.UserExistsError:
         await update.message.reply_text("❌ Ошибка при регистрации. Возможно, этот юзернейм или контакт уже заняты.")
@@ -290,8 +288,8 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
     user = context.user_data['login_user']
     stored_hash = user['password_hash']
     input_password = update.message.text
-    # We don't delete/hide password on login for simplicity, but it could be added
     if hash_password(input_password) == stored_hash:
+        db_data.log_activity(user_id=user['id'], action="login")
         await update.message.reply_text(f"🎉 Добро пожаловать, {user['full_name']}!")
         context.user_data['current_user'] = user
         context.user_data.pop('login_user')
@@ -385,7 +383,7 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [
         [InlineKeyboardButton("Взять книгу", callback_data="user_borrow"), InlineKeyboardButton("Вернуть книгу", callback_data="user_return")],
         [InlineKeyboardButton("Оценить книгу", callback_data="user_rate"), InlineKeyboardButton("Профиль", callback_data="user_profile")],
-        [InlineKeyboardButton("История", callback_data="user_history"), InlineKeyboardButton("Выйти", callback_data="logout")]
+        [InlineKeyboardButton("Уведомления 📬", callback_data="user_notifications"), InlineKeyboardButton("Выйти", callback_data="logout")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     if update.callback_query:
@@ -398,6 +396,7 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
     user = context.user_data.get('current_user')
+    db_data.log_activity(user_id=user['id'], action="logout")
     if db_data.get_borrowed_books(user['id']):
         keyboard = [[InlineKeyboardButton("Назад в меню", callback_data="user_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -406,8 +405,6 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     else:
         context.user_data.clear()
         await query.edit_message_text("Вы успешно вышли. Введите /start для входа.")
-        # This is a bit of a hack, but we want to end the conversation and show the start menu.
-        # A simple END might leave the user with a dead message.
         return ConversationHandler.END
 
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -519,6 +516,7 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text(f"Вы достигли лимита ({borrow_limit}) на заимствование.")
                 return await user_menu(update, context)
             db_data.borrow_book(user_id, selected_book['id'])
+            db_data.log_activity(user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}, Name: {selected_book['name']}")
             await query.edit_message_text(f"✅ Книга '{selected_book['name']}' успешно взята.")
             return await user_menu(update, context)
         else:
@@ -544,8 +542,10 @@ async def process_reservation_decision(update: Update, context: ContextTypes.DEF
     if not book_to_reserve:
         await query.edit_message_text("Ошибка. Попробуйте снова.")
         return await user_menu(update, context)
+    user_id = context.user_data['current_user']['id']
     if query.data == 'reserve_yes':
-        result = db_data.add_reservation(context.user_data['current_user']['id'], book_to_reserve['id'])
+        result = db_data.add_reservation(user_id, book_to_reserve['id'])
+        db_data.log_activity(user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}, Name: {book_to_reserve['name']}")
         await query.edit_message_text(f"✅ {result}")
     else:
         await query.edit_message_text("Действие отменено.")
@@ -583,9 +583,11 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
         return await user_menu(update, context)
     book_id = borrowed_info['book_id']
     book_name = borrowed_info['book_name']
+    user_id = context.user_data['current_user']['id']
     try:
         result = db_data.return_book(borrowed_info['borrow_id'], book_id)
         if result == "Успешно":
+            db_data.log_activity(user_id=user_id, action="return_book", details=f"Book ID: {book_id}, Name: {book_name}")
             context.user_data.pop('borrowed_map', None)
             context.user_data['just_returned_book'] = {'id': book_id, 'name': book_name}
             keyboard = [
@@ -598,7 +600,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
             if reservations:
                 user_to_notify_id = reservations[0]
                 notification_text = f"🎉 Книга '{book_name}', которую вы резервировали, снова в наличии."
-                send_telegram_message.delay(user_to_notify_id, notification_text)
+                create_and_send_notification.delay(user_id=user_to_notify_id, text=notification_text, category='reservation')
                 db_data.update_reservation_status(user_to_notify_id, book_id, notified=True)
             return USER_RATE_PROMPT_AFTER_RETURN
         else:
@@ -617,7 +619,6 @@ async def initiate_rating_from_return(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text("Ошибка. Информация о книге потеряна.")
         return await user_menu(update, context)
     context.user_data['book_to_rate'] = {'book_id': returned_book['id'], 'book_name': returned_book['name']}
-    # We will "trick" the next step by pre-filling context and calling the existing function
     return await select_rating(update, context, from_return=True)
 
 async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -633,7 +634,7 @@ async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     message_text = "Выберите книгу для оценки:"
     keyboard = []
     context.user_data['rating_map'] = {}
-    unique_books = {item['book_name']: item for item in history if item['book_id'] is not None}.values()
+    unique_books = {item['book_name']: item for item in history if 'book_id' in item and item['book_id'] is not None}.values()
     for i, book in enumerate(unique_books):
         rate_id = f"rate_{i}"
         keyboard.append([InlineKeyboardButton(f"{i+1}. {book['book_name']}", callback_data=rate_id)])
@@ -645,15 +646,16 @@ async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, from_return: bool = False) -> int:
     query = update.callback_query
-    await query.answer()
     if not from_return:
         book_info = context.user_data['rating_map'].get(query.data)
         if not book_info:
+            await query.answer()
             await query.edit_message_text("Ошибка выбора.")
             return await user_menu(update, context)
         context.user_data['book_to_rate'] = book_info
     else:
         book_info = context.user_data.get('book_to_rate')
+    await query.answer()
     message_text = f"Ваша оценка для книги **'{book_info['book_name']}'** от 1 до 5:"
     rating_buttons = [
         [InlineKeyboardButton(str(i), callback_data=f"rating_{i}") for i in range(1, 6)],
@@ -675,6 +677,7 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     book_info = context.user_data['book_to_rate']
     try:
         db_data.add_rating(user_id, book_info['book_id'], rating)
+        db_data.log_activity(user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
         message_text = f"✅ Ваша оценка '{rating}' для '{book_info['book_name']}' сохранена."
     except Exception as e:
         message_text = f"❌ Не удалось сохранить: {e}"
@@ -682,6 +685,35 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.pop('rating_map', None)
     await query.edit_message_text(message_text)
     return await user_menu(update, context)
+
+async def show_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает последние уведомления пользователя."""
+    query = update.callback_query
+    await query.answer()
+    user_id = context.user_data['current_user']['id']
+
+    try:
+        notifications = db_data.get_notifications_for_user(user_id)
+        
+        message_parts = ["📬 **Ваши последние уведомления:**\n"]
+        for notif in notifications:
+            date_str = notif['created_at'].strftime('%d.%m.%Y %H:%M')
+            status = "⚪️" if notif['is_read'] else "🔵" # Новое/прочитанное
+            category_map = {'broadcast': 'Рассылка', 'reservation': 'Резерв', 'system': 'Система'}
+            category_str = category_map.get(notif['category'], notif['category'].capitalize())
+            
+            message_parts.append(f"`{date_str}`\n{status} **[{category_str}]** {notif['text']}\n")
+
+        message_text = "\n".join(message_parts)
+
+    except db_data.NotFoundError:
+        message_text = "📬 У вас пока нет уведомлений."
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+    return USER_MENU # Остаемся в главном меню
 
 # --- ФУНКЦИИ УДАЛЕНИЯ АККАУНТА ---
 
@@ -708,6 +740,7 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
     user_id = context.user_data['current_user']['id']
     result = db_data.delete_user_by_self(user_id)
     if result == "Успешно":
+        db_data.log_activity(user_id=user_id, action="self_delete_account")
         await query.edit_message_text("Ваш аккаунт был удален. Прощайте!")
         context.user_data.clear()
         return ConversationHandler.END
@@ -721,7 +754,6 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
 
 def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -752,6 +784,7 @@ def main() -> None:
                 CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
                 CallbackQueryHandler(view_profile, pattern="^user_profile$"),
                 CallbackQueryHandler(view_borrow_history, pattern="^user_history$"),
+                CallbackQueryHandler(show_notifications, pattern="^user_notifications$"),
                 CallbackQueryHandler(ask_delete_self_confirmation, pattern="^user_delete_account$"),
                 CallbackQueryHandler(logout, pattern="^logout$"),
                 CallbackQueryHandler(user_menu, pattern="^user_menu$"),
