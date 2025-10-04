@@ -203,8 +203,6 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
 
-    # Извлекаем ID пользователя и номер страницы
-    # e.g., "admin_activity_12_1" -> user_id=12, page=1
     parts = query.data.split('_')
     user_id = int(parts[2])
     page = int(parts[3])
@@ -212,10 +210,12 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     logs_per_page = 10
 
     try:
-        logs, total_logs = db_data.get_user_activity(user_id, limit=logs_per_page, offset=page * logs_per_page)
-
-        user = db_data.get_user_by_id(user_id) # Получаем имя для заголовка
-        
+        # --- НАЧАЛО ИЗМЕНЕНИЙ ---
+        with get_db_connection() as conn:
+            logs, total_logs = db_data.get_user_activity(conn, user_id, limit=logs_per_page, offset=page * logs_per_page)
+            user = db_data.get_user_by_id(conn, user_id)
+        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
+            
         message_parts = [f"**📜 Журнал действий для `{user['username']}`**\n(Всего записей: {total_logs}, страница {page + 1})\n"]
 
         if logs:
@@ -237,7 +237,6 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if nav_buttons:
             keyboard.append(nav_buttons)
         
-        # Кнопка возврата к карточке пользователя
         keyboard.append([InlineKeyboardButton("👤 Назад к карточке", callback_data=f"admin_view_user_{user_id}")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)

@@ -375,28 +375,29 @@ def get_notifications_for_user(conn, user_id: int, limit: int = 20):
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in rows]
     
-def get_user_activity(user_id: int, limit: int, offset: int):
+def get_user_activity(conn, user_id: int, limit: int, offset: int):
     """Возвращает порцию логов активности для пользователя и их общее количество."""
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            # Получаем общее количество записей для этого пользователя
-            cur.execute("SELECT COUNT(*) FROM activity_log WHERE user_id = %s", (user_id,))
-            total_logs = cur.fetchone()[0]
+    # Контекстный менеджер 'with get_db_connection()' удален,
+    # так как 'conn' теперь передается напрямую.
+    with conn.cursor() as cur:
+        # Получаем общее количество записей для этого пользователя
+        cur.execute("SELECT COUNT(*) FROM activity_log WHERE user_id = %s", (user_id,))
+        total_logs = cur.fetchone()[0]
 
-            # Получаем срез логов
-            cur.execute(
-                """
-                SELECT action, details, timestamp
-                FROM activity_log
-                WHERE user_id = %s
-                ORDER BY timestamp DESC
-                LIMIT %s OFFSET %s
-                """,
-                (user_id, limit, offset)
-            )
-            
-            rows = cur.fetchall()
-            columns = [desc[0] for desc in cur.description]
-            activity_on_page = [dict(zip(columns, row)) for row in rows]
-            
-            return activity_on_page, total_logs
+        # Получаем срез логов
+        cur.execute(
+            """
+            SELECT action, details, timestamp
+            FROM activity_log
+            WHERE user_id = %s
+            ORDER BY timestamp DESC
+            LIMIT %s OFFSET %s
+            """,
+            (user_id, limit, offset)
+        )
+        
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        activity_on_page = [dict(zip(columns, row)) for row in rows]
+        
+        return activity_on_page, total_logs
