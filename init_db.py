@@ -33,7 +33,8 @@ def initialize_database():
             contact_info VARCHAR(255) UNIQUE NOT NULL,
             status VARCHAR(50),
             password_hash VARCHAR(255) NOT NULL,
-            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            registration_code VARCHAR(36) UNIQUE
         );
         """,
         """

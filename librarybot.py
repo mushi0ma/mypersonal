@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+import uuid
 import os
 import random
 import re
@@ -54,9 +55,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
     # --- Новые состояния для редактирования профиля ---
     EDIT_PROFILE_MENU, EDITING_FULL_NAME, EDITING_CONTACT,
-    EDITING_PASSWORD_CURRENT, EDITING_PASSWORD_NEW, EDITING_PASSWORD_CONFIRM
-
-) = range(35)
+    EDITING_PASSWORD_CURRENT, EDITING_PASSWORD_NEW, EDITING_PASSWORD_CONFIRM,
+    AWAITING_NOTIFICATION_BOT
+) = range(36)
 
 
 # --------------------------
@@ -172,7 +173,7 @@ async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("❌ Неверный формат. Используйте **ДД.ММ.ГГГГ**.")
         return REGISTER_DOB
     context.user_data['registration']['dob'] = dob
-    await update.message.reply_text("📞 Введите ваш **контакт** (email или телефон):", parse_mode='Markdown')
+    await update.message.reply_text("📞 Введите ваш **контакт** (email, телефон или @username):", parse_mode='Markdown')
     return REGISTER_CONTACT
 
 async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -242,32 +243,91 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return REGISTER_CONFIRM_PASSWORD
 
 async def get_password_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает второй пароль, сравнивает и завершает регистрацию."""
+    """
+    Завершает сбор данных, создает пользователя в БД
+    и отправляет его на подписку к боту-уведомителю.
+    """
     password_confirm = update.message.text
     hidden_password_text = "•" * len(password_confirm)
     await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
+
+    # Проверка совпадения паролей (эта часть остается без изменений)
     if context.user_data['registration'].get('password_temp') != password_confirm:
         await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, придумайте пароль заново.")
-        # Возвращаемся на шаг назад, чтобы переспросить первый пароль
         await update.message.reply_text("🔑 Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
         return REGISTER_PASSWORD
 
     context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
-    user_info = update.message.from_user
-    context.user_data['registration']['telegram_id'] = user_info.id
-    context.user_data['registration']['telegram_username'] = user_info.username if user_info.username else None
+    
+    # --- НАЧАЛО НОВОЙ ЛОГИКИ ---
+    user_data = context.user_data['registration']
+    
     try:
         with get_db_connection() as conn:
-            user_id = db_data.add_user(conn, context.user_data['registration'])
-            db_data.log_activity(conn, user_id=user_id, action="registration")
-        await update.message.reply_text("🎉 Регистрация успешно завершена! Теперь вы можете войти.")
+            # 1. Создаем пользователя БЕЗ telegram_id
+            user_id = db_data.add_user(conn, user_data) 
+            db_data.log_activity(conn, user_id=user_id, action="registration_start")
+            
+            # 2. Генерируем и сохраняем уникальный код для привязки
+            reg_code = db_data.set_registration_code(conn, user_id)
+            context.user_data['user_id_for_activation'] = user_id
+
+        # 3. Получаем юзернейм бота-уведомителя из .env
+        notifier_bot_username = os.getenv("NOTIFICATION_BOT_USERNAME", "ВашБотУведомитель")
+        
+        # 4. Формируем "глубокую ссылку" и кнопки
+        keyboard = [
+            [InlineKeyboardButton("🤖 Подписаться на уведомления", url=f"https://t.me/{notifier_bot_username}?start={reg_code}")],
+            [InlineKeyboardButton("✅ Я подписался", callback_data="confirm_subscription")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # 5. Отправляем финальное сообщение и переходим в состояние ожидания
+        await update.message.reply_text(
+            "✅ Отлично! Вы почти у цели.\n\n"
+            "**Последний шаг:** подпишитесь на нашего бота-уведомителя. Он будет присылать вам коды и важные оповещения. Нажмите на кнопку ниже, запустите бота, а затем вернитесь сюда и нажмите 'Я подписался'.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return AWAITING_NOTIFICATION_BOT # Переходим в новое состояние ожидания
+
     except db_data.UserExistsError:
         await update.message.reply_text("❌ Ошибка: этот юзернейм или контакт уже заняты.")
+        context.user_data.clear()
+        return await start(update, context)
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}")
         await update.message.reply_text("❌ Произошла системная ошибка.")
-    context.user_data.clear()
-    return await start(update, context)
+        context.user_data.clear()
+        return await start(update, context)
+    
+async def check_notification_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Проверяет, привязал ли пользователь telegram_id через бота-уведомителя."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = context.user_data.get('user_id_for_activation')
+    if not user_id:
+        await query.edit_message_text("❌ Произошла ошибка сессии. Пожалуйста, начните регистрацию заново с /start.")
+        return ConversationHandler.END
+
+    try:
+        with get_db_connection() as conn:
+            user = db_data.get_user_by_id(conn, user_id)
+        
+        if user.get('telegram_id'):
+            db_data.log_activity(conn, user_id=user_id, action="registration_finish")
+            await query.edit_message_text("🎉 Регистрация полностью завершена! Теперь вы можете войти.")
+            context.user_data.clear()
+            return await start(update, context)
+        else:
+            await query.answer("Вы еще не запустили бота-уведомителя. Пожалуйста, сделайте это.", show_alert=True)
+            return AWAITING_NOTIFICATION_BOT
+            
+    except Exception as e:
+        logger.error(f"Ошибка при проверке подписки для user_id {user_id}: {e}")
+        await query.edit_message_text("❌ Произошла системная ошибка при проверке подписки.")
+        return ConversationHandler.END
 
 # --- ФУНКЦИИ ВХОДА ---
 

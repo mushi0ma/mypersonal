@@ -52,6 +52,19 @@ services:
       redis:
         condition: service_started
 
+# --- НОВЫЙ СЕРВИС ДЛЯ БОТА-УВЕДОМИТЕЛЯ ---
+  notification_bot:
+    build: .
+    restart: always
+    command: python notification_bot.py
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
   # Фоновый обработчик задач Celery
   celery_worker:
     build: .

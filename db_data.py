@@ -3,6 +3,7 @@ import logging
 from db_utils import hash_password, get_db_connection
 from datetime import datetime
 import psycopg2
+import uuid
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -630,3 +631,25 @@ def update_user_password_by_id(conn, user_id: int, new_password: str):
         if cur.rowcount == 0:
             raise NotFoundError("Пользователь с таким ID не найден для обновления пароля.")
     return True
+
+def set_registration_code(conn, user_id: int) -> str:
+    """Генерирует, сохраняет и возвращает уникальный код регистрации для пользователя."""
+    code = str(uuid.uuid4())
+    with conn.cursor() as cur:
+        cur.execute("UPDATE users SET registration_code = %s WHERE id = %s", (code, user_id))
+    return code
+
+def link_telegram_id_by_code(conn, code: str, telegram_id: int, telegram_username: str):
+    """Находит пользователя по коду регистрации и обновляет его telegram_id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE users 
+            SET telegram_id = %s, telegram_username = %s 
+            WHERE registration_code = %s
+            RETURNING id
+            """,
+            (telegram_id, telegram_username, code)
+        )
+        if cur.fetchone() is None:
+            raise NotFoundError("Пользователь с таким кодом регистрации не найден.")
