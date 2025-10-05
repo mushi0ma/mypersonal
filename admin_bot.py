@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import logging
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -12,6 +13,9 @@ from telegram.ext import (
     ConversationHandler,
     CallbackQueryHandler
 )
+
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Загрузка переменных окружения ---
 load_dotenv()
@@ -55,11 +59,11 @@ def calculate_age(dob_string: str) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Приветственное сообщение для админа."""
     await update.message.reply_text(
-        "👋 **Добро пожаловать в панель администратора!**\n\n"
-        "Здесь вы можете управлять ботом. Доступные команды:\n\n"
-        "📢 /broadcast - Отправить сообщение всем пользователям\n"
-        "📊 /stats - Показать статистику пользователей\n"
-        "📚 /books - Управление каталогом книг"
+    "👋 **Добро пожаловать в панель администратора!**\n\n"
+    "Здесь вы можете управлять ботом. Доступные команды:\n\n"
+    "📢 /broadcast - Отправить сообщение всем пользователям\n"
+    "📊 /stats - Показать статистику пользователей\n"
+    "📚 /books - Управление каталогом книг"
     )
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -78,6 +82,10 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             # Вызываем новую задачу для уведомления пользователей
             tasks.notify_user.delay(user_id=user_id, text=message_text, category='broadcast')
         await update.message.reply_text(f"✅ Рассылка успешно запущена для {len(user_db_ids)} пользователей.")
+
+        admin_text = f"📢 Админ запустил рассылку для {len(user_db_ids)} пользователей."
+        tasks.notify_admin.delay(text=admin_text, category='admin_action')
+
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при запуске рассылки: {e}")
     return ConversationHandler.END
@@ -122,7 +130,15 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при получении статистики: {e}")
+        error_message = f"❌ Ошибка при получении статистики: {e}"
+        logger.error(error_message, exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `stats`\n**Ошибка:** `{e}`")
+        # Отвечаем пользователю
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
 
 async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку пользователя."""
@@ -169,7 +185,15 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
-        await query.edit_message_text(f"❌ Произошла ошибка: {e}")
+        error_message = f"❌ Ошибка при получении карточки пользователя: {e}"
+        logger.error(error_message, exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `view_user_profile`\n**Ошибка:** `{e}`")
+        # Отвечаем пользователю
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
 
 async def ask_for_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Спрашивает у админа подтверждение на удаление."""
@@ -205,10 +229,17 @@ async def process_delete_confirmation(update: Update, context: ContextTypes.DEFA
 
         await query.edit_message_text(f"✅ Пользователь успешно удален (анонимизирован).")
     except Exception as e:
-        await query.edit_message_text(f"❌ Ошибка при удалении: {e}")
+        logger.error(f"Ошибка при удалении пользователя admin'ом: {e}", exc_info=True)
         tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `process_delete_confirmation`\n**Ошибка:** `{e}`")
-    query.data = f"stats_page_{current_page}"
-    await stats(update, context)
+
+        # --- УПРОЩЕННЫЙ БЛОК ---
+        # Просто показываем ошибку и кнопку для возврата
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"stats_page_{current_page}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            f"❌ Ошибка при удалении: {e}",
+            reply_markup=reply_markup
+        )
 
 async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает постраничный лог активности пользователя."""
@@ -253,7 +284,15 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
 
     except Exception as e:
-        await query.edit_message_text(f"❌ Произошла ошибка при получении логов: {e}")
+        error_message = f"❌ Произошла ошибка при получении логов: {e}"
+        logger.error(error_message, exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `show_user_activity`\n**Ошибка:** `{e}`")
+        # Отвечаем пользователю
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
 
 async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает постраничный список всех книг."""
@@ -300,11 +339,12 @@ async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         error_message = f"❌ Ошибка при получении списка книг: {e}"
+        logger.error(error_message, exc_info=True)
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `show_books_list`\n**Ошибка:** `{e}`")
         if query:
             await query.edit_message_text(error_message)
         else:
             await update.message.reply_text(error_message)
-
 
 def _build_book_details_content(conn, book_id, current_page=0):
     """Строит контент для карточки книги (текст и клавиатуру)."""
@@ -365,7 +405,15 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except db_data.NotFoundError:
         await query.edit_message_text("❌ Книга не найдена.")
     except Exception as e:
-        await query.edit_message_text(f"❌ Произошла ошибка при получении деталей книги: {e}")
+        error_message = f"❌ Произошла ошибка при получении деталей книги: {e}"
+        logger.error(error_message, exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `stats`\n**Ошибка:** `{e}`")
+        # Отвечаем пользователю
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
 
 async def start_book_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог редактирования книги, показывая поля для выбора."""
@@ -633,7 +681,15 @@ async def add_book_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await query.edit_message_caption(caption="✅ Новая книга успешно добавлена в каталог!", reply_markup=None)
 
     except Exception as e:
-        await query.edit_message_caption(caption=f"❌ Ошибка при сохранении книги: {e}", reply_markup=None)
+        error_message = f"❌ Ошибка при сохранении книги: {e}"
+        logger.error(error_message, exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `stats`\n**Ошибка:** `{e}`")
+        # Отвечаем пользователю
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
     
     return ConversationHandler.END
 
@@ -717,7 +773,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(ask_for_book_delete_confirmation, pattern="^admin_delete_book_"))
     application.add_handler(CallbackQueryHandler(process_book_delete, pattern="^admin_confirm_book_delete_"))
 
-    print("✅ Админ-бот запущен.")
+    logger.info("Админ-бот запущен.")
     application.run_polling()
 
 if __name__ == "__main__":

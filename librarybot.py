@@ -46,7 +46,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     FORGOT_PASSWORD_CONTACT, FORGOT_PASSWORD_VERIFY_CODE,
     FORGOT_PASSWORD_SET_NEW, FORGOT_PASSWORD_CONFIRM_NEW,
     USER_MENU, USER_BORROW_BOOK_SELECT,
-    USER_RETURN_BOOK, USER_RATE_PROMPT_AFTER_RETURN,
+    USER_RETURN_BOOK,
     USER_RATE_BOOK_SELECT, USER_RATE_BOOK_RATING, USER_DELETE_CONFIRM,
     USER_RESERVE_BOOK_CONFIRM,
     USER_VIEW_HISTORY, USER_NOTIFICATIONS,
@@ -59,7 +59,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     AWAITING_NOTIFICATION_BOT,
     AWAIT_CONTACT_VERIFICATION_CODE,
     VIEWING_TOP_BOOKS
-) = range(38)
+) = range(37)
 
 
 # --------------------------
@@ -1325,14 +1325,14 @@ async def process_book_extension(update: Update, context: ContextTypes.DEFAULT_T
 # --------------------------
 
 def main() -> None:
+    """Запускает основного бота."""
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    # --- Вложенный обработчик для редактирования профиля ---
     edit_profile_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_profile_edit, pattern="^edit_profile$")],
         states={
-            EDIT_PROFILE_MENU: [
-                CallbackQueryHandler(select_field_to_edit, pattern="^edit_field_")
-            ],
+            EDIT_PROFILE_MENU: [CallbackQueryHandler(select_field_to_edit, pattern="^edit_field_")],
             EDITING_FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_full_name_edit)],
             EDITING_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_contact_edit)],
             AWAIT_CONTACT_VERIFICATION_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_new_contact_code)],
@@ -1344,64 +1344,78 @@ def main() -> None:
             CommandHandler("cancel", cancel),
             CallbackQueryHandler(view_profile, pattern="^user_profile$")
         ],
-        map_to_parent={
-            ConversationHandler.END: USER_MENU,
-        }
+        map_to_parent={ ConversationHandler.END: USER_MENU }
     )
 
+    # --- Основной словарь состояний ---
     main_conv_states = {
+        # -- Вход и Регистрация --
         START_ROUTES: [
             CallbackQueryHandler(start_registration, pattern="^register$"),
             CallbackQueryHandler(start_login, pattern="^login$"),
+            # Обработчики для кнопок из уведомлений (должны работать всегда)
+            CallbackQueryHandler(process_book_extension, pattern=r"^extend_borrow_"),
+            CallbackQueryHandler(start_rating_from_notification, pattern=r"^rate_book_"),
+            CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
+            CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
         ],
-        REGISTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-        REGISTER_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dob)],
-        REGISTER_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
-        REGISTER_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_registration_code)],
+        AWAITING_NOTIFICATION_BOT: [
+            CallbackQueryHandler(check_notification_subscription, pattern="^confirm_subscription$")
+        ],
+        **{state: [MessageHandler(filters.TEXT & ~filters.COMMAND, handler)] for state, handler in {
+            REGISTER_NAME: get_name,
+            REGISTER_DOB: get_dob,
+            REGISTER_CONTACT: get_contact,
+            REGISTER_VERIFY_CODE: verify_registration_code,
+            REGISTER_USERNAME: get_username,
+            REGISTER_PASSWORD: get_password,
+            REGISTER_CONFIRM_PASSWORD: get_password_confirmation,
+            LOGIN_PASSWORD: check_login_password,
+            FORGOT_PASSWORD_CONTACT: get_forgot_password_contact,
+            FORGOT_PASSWORD_VERIFY_CODE: verify_forgot_password_code,
+            FORGOT_PASSWORD_SET_NEW: set_new_password,
+            FORGOT_PASSWORD_CONFIRM_NEW: confirm_new_password,
+        }.items()},
         REGISTER_STATUS: [CallbackQueryHandler(get_status, pattern=r"^(студент|учитель)$")],
-        REGISTER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_username)],
-        REGISTER_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password)],
-        REGISTER_CONFIRM_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_password_confirmation)],
         LOGIN_CONTACT: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, get_login_contact),
             CallbackQueryHandler(start_forgot_password, pattern="^forgot_password$")
         ],
-        LOGIN_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_login_password)],
-        FORGOT_PASSWORD_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_forgot_password_contact)],
-        FORGOT_PASSWORD_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_forgot_password_code)],
-        FORGOT_PASSWORD_SET_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, set_new_password)],
-        FORGOT_PASSWORD_CONFIRM_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_new_password)],
+
+        # -- Главное Меню и его опции --
         USER_MENU: [
+            # Основные действия
             CallbackQueryHandler(start_return_book, pattern="^user_return$"),
             CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
             CallbackQueryHandler(view_profile, pattern="^user_profile$"),
+            CallbackQueryHandler(logout, pattern="^logout$"),
+            # Навигация
             CallbackQueryHandler(view_borrow_history, pattern="^user_history$"),
             CallbackQueryHandler(show_notifications, pattern="^user_notifications$"),
-            CallbackQueryHandler(ask_delete_self_confirmation, pattern="^user_delete_account$"),
-            CallbackQueryHandler(logout, pattern="^logout$"),
-            CallbackQueryHandler(user_menu, pattern="^user_menu$"),
+            CallbackQueryHandler(show_top_books, pattern="^top_books$"),
+            # Поиск
             CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
             CallbackQueryHandler(start_search, pattern="^search_book$"),
-            CallbackQueryHandler(show_top_books, pattern="^top_books$"),
-            edit_profile_handler,
-            CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
-            CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
-            CallbackQueryHandler(process_book_extension, pattern=r"^extend_borrow_"),
-            CallbackQueryHandler(start_rating_from_notification, pattern=r"^rate_book_"),
+            # Вложенный обработчик
+            edit_profile_handler, 
+            # Возврат в меню
+            CallbackQueryHandler(user_menu, pattern="^user_menu$"),
         ],
+
+        # -- Процесс взятия и резервирования книги --
         USER_BORROW_BOOK_SELECT: [
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
         USER_RESERVE_BOOK_CONFIRM: [CallbackQueryHandler(process_reservation_decision, pattern=r"^reserve_(yes|no)$")],
+
+        # -- Процесс возврата книги --
         USER_RETURN_BOOK: [
             CallbackQueryHandler(process_return_book, pattern=r"^return_\d+$"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
-        USER_RATE_PROMPT_AFTER_RETURN: [
-            CallbackQueryHandler(initiate_rating_from_return, pattern="^rate_after_return$"),
-            CallbackQueryHandler(user_menu, pattern="^user_menu$")
-        ],
+
+        # -- Процесс оценки книги --
         USER_RATE_BOOK_SELECT: [
             CallbackQueryHandler(select_rating, pattern=r"^rate_\d+$"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
@@ -1411,10 +1425,14 @@ def main() -> None:
             CallbackQueryHandler(start_rate_book, pattern="^user_rate$"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
         ],
+
+        # -- Процесс удаления аккаунта --
         USER_DELETE_CONFIRM: [
             CallbackQueryHandler(process_delete_self_confirmation, pattern="^user_confirm_self_delete$"),
             CallbackQueryHandler(view_profile, pattern="^user_profile$"),
         ],
+
+        # -- Процессы поиска --
         SHOWING_GENRES: [
             CallbackQueryHandler(show_books_in_genre, pattern=r"^genre_"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
@@ -1434,9 +1452,6 @@ def main() -> None:
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
             CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
         ],
-        AWAITING_NOTIFICATION_BOT: [
-            CallbackQueryHandler(check_notification_subscription, pattern="^confirm_subscription$")
-        ],
         VIEWING_TOP_BOOKS: [
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
@@ -1445,7 +1460,7 @@ def main() -> None:
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states=main_conv_states,
-        fallbacks=[CommandHandler("start", start), CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("start", start), CommandHandler("cancel", cancel)], # Добавили cancel
     )
 
     application.add_handler(conv_handler)

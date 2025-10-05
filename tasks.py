@@ -1,5 +1,6 @@
 # tasks.py
 import os
+import logging
 from celery import Celery
 from celery.schedules import crontab
 from dotenv import load_dotenv
@@ -7,8 +8,10 @@ import telegram
 import db_data
 from db_utils import get_db_connection
 
-# Загружаем переменные окружения
+# Загружаем переменные окружения и настраиваем логгер
 load_dotenv()
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Настройка Celery ---
 celery_app = Celery(
@@ -18,20 +21,19 @@ celery_app = Celery(
 )
 
 # --- ИНИЦИАЛИЗАЦИЯ ДВУХ БОТОВ ---
-
 try:
     user_notifier_bot = telegram.Bot(token=os.getenv("NOTIFICATION_BOT_TOKEN"))
-    print("✅ API бота-уведомителя для ПОЛЬЗОВАТЕЛЕЙ инициализировано.")
+    logger.info("API бота-уведомителя для ПОЛЬЗОВАТЕЛЕЙ инициализировано.")
 except Exception as e:
-    print(f"❌ Не удалось инициализировать API бота-уведомителя для пользователей: {e}")
+    logger.error(f"Не удалось инициализировать API бота-уведомителя для пользователей: {e}")
     user_notifier_bot = None
 
 try:
     admin_notifier_bot = telegram.Bot(token=os.getenv("ADMIN_NOTIFICATION_BOT_TOKEN"))
     ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
-    print("✅ API бота-аудитора для АДМИНА инициализировано.")
+    logger.info("API бота-аудитора для АДМИНА инициализировано.")
 except Exception as e:
-    print(f"❌ Не удалось инициализировать API бота-аудитора для админа: {e}")
+    logger.error(f"Не удалось инициализировать API бота-аудитора для админа: {e}")
     admin_notifier_bot = None
 
 # --- НИЗКОУРОВНЕВЫЕ ЗАДАЧИ ОТПРАВКИ ---
@@ -40,7 +42,7 @@ except Exception as e:
 def notify_user(user_id: int, text: str, category: str = 'system', button_text: str = None, button_callback: str = None):
     """Сохраняет и отправляет уведомление КОНКРЕТНОМУ ПОЛЬЗОВАТЕЛЮ через Bot-Notifier."""
     if not user_notifier_bot:
-        print(f"❌ Bot-Notifier недоступен. Уведомление для user_id={user_id} не отправлено.")
+        logger.warning(f"Bot-Notifier недоступен. Уведомление для user_id={user_id} не отправлено.")
         return
 
     try:
@@ -59,28 +61,28 @@ def notify_user(user_id: int, text: str, category: str = 'system', button_text: 
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
-        print(f"✅ Уведомление '{category}' для user_id={user_id} отправлено на telegram_id={telegram_id}.")
+        logger.info(f"Уведомление '{category}' для user_id={user_id} отправлено на telegram_id={telegram_id}.")
     except Exception as e:
-        print(f"❌ Ошибка в задаче notify_user для user_id={user_id}: {e}")
+        logger.error(f"Ошибка в задаче notify_user для user_id={user_id}: {e}")
 
 @celery_app.task
 def notify_admin(text: str, category: str = 'audit'):
     """Отправляет системное уведомление АДМИНИСТРАТОРУ через Bot-Auditor."""
     if not admin_notifier_bot:
-        print(f"❌ Bot-Auditor недоступен. Системное уведомление не отправлено.")
+        logger.warning(f"Bot-Auditor недоступен. Системное уведомление не отправлено.")
         return
     try:
         admin_notifier_bot.send_message(chat_id=ADMIN_TELEGRAM_ID, text=text, parse_mode='Markdown')
-        print(f"✅ Аудит-уведомление '{category}' для админа отправлено.")
+        logger.info(f"Аудит-уведомление '{category}' для админа отправлено.")
     except Exception as e:
-        print(f"❌ Ошибка в задаче notify_admin: {e}")
+        logger.error(f"Ошибка в задаче notify_admin: {e}")
 
 # --- ВЫСОКОУРОВНЕВЫЕ И ПЕРИОДИЧЕСКИЕ ЗАДАЧИ ---
 
 @celery_app.task
 def broadcast_new_book(book_id: int):
     """Рассылает уведомление о новой книге всем пользователям."""
-    print(f"Запущена рассылка о новой книге с ID: {book_id}")
+    logger.info(f"Запущена рассылка о новой книге с ID: {book_id}")
     try:
         with get_db_connection() as conn:
             book = db_data.get_book_card_details(conn, book_id)
@@ -91,51 +93,44 @@ def broadcast_new_book(book_id: int):
         button_callback = f"view_book_{book_id}"
 
         for user_id in all_user_ids:
-            notify_user.delay(
+            notify_user(
                 user_id=user_id,
                 text=text,
                 category='new_arrival',
                 button_text=button_text,
                 button_callback=button_callback
             )
-        print(f"Рассылка о новой книге завершена для {len(all_user_ids)} пользователей.")
-        notify_admin.delay(f"🚀 Успешно разослано уведомление о новой книге «{book['name']}» для {len(all_user_ids)} пользователей.")
+        logger.info(f"Рассылка о новой книге завершена для {len(all_user_ids)} пользователей.")
+        notify_admin(f"🚀 Успешно разослано уведомление о новой книге «{book['name']}» для {len(all_user_ids)} пользователей.")
     except Exception as e:
-        print(f"❌ Ошибка в задаче broadcast_new_book: {e}")
-        notify_admin.delay(f"❗️ Ошибка при рассылке о новой книге (ID: {book_id}): {e}")
+        logger.error(f"Ошибка в задаче broadcast_new_book: {e}")
+        notify_admin(f"❗️ Ошибка при рассылке о новой книге (ID: {book_id}): {e}")
 
 @celery_app.task
 def check_due_dates_and_notify():
-    """
-    Проверяет книги с истекшим сроком и те, у которых срок скоро истечет,
-    и отправляет соответствующие уведомления.
-    """
-    print("Выполняется периодическая задача: проверка сроков сдачи книг...")
+    """Проверяет сроки сдачи книг и уведомляет должников и администратора."""
+    logger.info("Выполняется периодическая задача: проверка сроков сдачи книг...")
     try:
         with get_db_connection() as conn:
-            # --- Блок 1: Проверка просроченных книг ---
             overdue_entries = db_data.get_users_with_overdue_books(conn)
             if overdue_entries:
-                print(f"Найдено просроченных книг: {len(overdue_entries)}")
+                logger.info(f"Найдено просроченных книг: {len(overdue_entries)}")
                 for entry in overdue_entries:
+                    # ... (логика отправки та же)
                     user_id, username, book_name, due_date = entry['user_id'], entry['username'], entry['book_name'], entry['due_date']
                     due_date_str = due_date.strftime('%d.%m.%Y')
-                    
                     user_text = f"❗️ **Просрочка:** Срок возврата «{book_name}» истек {due_date_str}! Пожалуйста, верните ее."
-                    notify_user(user_id=user_id, text=user_text, category='due_date') # <-- Вызов без .delay()
-                    
+                    notify_user(user_id=user_id, text=user_text, category='due_date')
                     admin_text = f"❗️Пользователь @{username} просрочил «{book_name}» (срок: {due_date_str})."
-                    notify_admin(text=admin_text, category='overdue') # <-- Вызов без .delay()
+                    notify_admin(text=admin_text, category='overdue')
 
-            # --- Блок 2: Проверка книг, у которых скоро истекает срок ---
             due_soon_entries = db_data.get_users_with_books_due_soon(conn, days_ahead=2)
             if due_soon_entries:
-                print(f"Найдено книг с подходящим сроком возврата: {len(due_soon_entries)}")
+                logger.info(f"Найдено книг с подходящим сроком возврата: {len(due_soon_entries)}")
                 for entry in due_soon_entries:
                     user_id, book_name, borrow_id = entry['user_id'], entry['book_name'], entry['borrow_id']
                     user_text = f"🔔 **Напоминание:** Срок возврата книги «{book_name}» истекает через 2 дня."
-                    
-                    notify_user( # <-- Вызов без .delay()
+                    notify_user(
                         user_id=user_id, 
                         text=user_text, 
                         category='due_date_reminder',
@@ -144,15 +139,14 @@ def check_due_dates_and_notify():
                     )
         
             if not overdue_entries and not due_soon_entries:
-                print("Книг для отправки уведомлений не найдено.")
+                logger.info("Книг для отправки уведомлений не найдено.")
 
     except Exception as e:
         error_message = f"❗️ **Критическая ошибка в периодической задаче**\n\n`check_due_dates_and_notify`:\n`{e}`"
-        print(f"❌ {error_message}")
-        notify_admin(text=error_message, category='error') # <-- Вызов без .delay()
+        logger.error(error_message)
+        notify_admin(text=error_message, category='error')
 
 # --- Расписание для периодических задач (Celery Beat) ---
-# Этот блок остается без изменений
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
         'task': 'tasks.check_due_dates_and_notify',
