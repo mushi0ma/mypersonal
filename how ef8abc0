@@ -1,0 +1,120 @@
+*   [33mef8abc0[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m Merge pull request #10 from mushi0ma/fix/bot-startup-and-pagination
+[31m|[m[32m\[m  
+[31m|[m * [33m7966b5a[m[33m ([m[1;31morigin/fix/bot-startup-and-pagination[m[33m)[m refactor: Improve book editing flow in admin_bot.py
+* [32m|[m [33ma228234[m Merge pull request #9 from mushi0ma/fix/bot-startup-and-pagination
+[33m|[m[32m\[m[32m|[m 
+[33m|[m * [33mfa069ca[m feat: Enhance and translate all messages in admin_bot.py
+* [34m|[m [33m1fff221[m Merge pull request #8 from mushi0ma/fix/bot-startup-and-pagination
+[35m|[m[34m\[m[34m|[m 
+[35m|[m * [33mb2a4e41[m feat: Enhance and translate all user-facing and terminal messages
+* [36m|[m [33mc1e9f44[m Merge pull request #7 from mushi0ma/fix/bot-startup-and-pagination
+[1;31m|[m[36m\[m[36m|[m 
+[1;31m|[m * [33m5f283c5[m fix: Correct bot startup and genre pagination
+[1;31m|[m[1;31m/[m  
+* [33m394eed3[m updated some gunctions, now user can edit info
+* [33m410e011[m fixing bugs
+* [33me3da7cb[m navigation through books is changed
+* [33m60ca41d[m deleted dead code
+* [33mc1292cc[m updated user menu
+* [33mf57d6ab[m updated search
+* [33meb956cf[m now books can be separated by genres
+* [33m75c4e22[m admin now can add books
+* [33m0a57e25[m admin now can delete books
+* [33mbad8fc7[m admin now can edit books
+* [33ma9d4336[m added books logic
+* [33md95ba80[m fixing function
+* [33m39793a1[m new function added
+* [33mc4e8c5e[m get_user_activity function added
+* [33m6b8a2b9[m adding more logging
+*   [33madc6aec[m Merge pull request #6 from mushi0ma/feature-branch
+[1;33m|[m[1;34m\[m  
+[1;33m|[m * [33m846b82b[m[33m ([m[1;31morigin/feature-branch[m[33m)[m Refactor database access to use dependency injection.
+* [1;34m|[m [33m61b2967[m deleting comments
+* [1;34m|[m [33mb0493fe[m Merge pull request #5 from mushi0ma/feature-branch
+[1;35m|[m[1;34m\[m[1;34m|[m 
+[1;35m|[m * [33maa589a9[m Refactored `db_data.py` to accept a database connection object (`conn`) in all its functions, enabling dependency injection and breaking the hard dependency on the `get_db_connection` utility.
+[1;35m|[m[1;35m/[m  
+* [33mcc89ae1[m enc test changed
+* [33m3df6b45[m trying to fix testers again
+* [33md11f2d5[m fixing bugs with testers
+* [33mb4fb609[m trying to fix one bug
+* [33md623c0c[m fixing bugs
+* [33m75b1571[m fixing bugs
+* [33ma590670[m edited conftest
+* [33m5c8eed6[m editing adminbot
+* [33mdce2b1f[m editing test files
+* [33mdd22dee[m changed librarybot.py
+* [33m2380cfd[m changed librarybot test file
+* [33mcafc928[m changed tests files
+*   [33mf6b6e60[m Merge branch 'main' of https://github.com/mushi0ma/mypersonal
+[31m|[m[32m\[m  
+[31m|[m *   [33m99408e4[m Merge pull request #4 from mushi0ma/feature/refactor-test-suite
+[31m|[m [33m|[m[34m\[m  
+[31m|[m [33m|[m *   [33m14867b3[m[33m ([m[1;31morigin/feature/refactor-test-suite[m[33m)[m Merge branch 'main' into feature/refactor-test-suite
+[31m|[m [33m|[m [35m|[m[33m\[m  
+[31m|[m [33m|[m [35m|[m[33m/[m  
+[31m|[m [33m|[m[33m/[m[35m|[m   
+[31m|[m * [35m|[m   [33m06b4dcc[m Merge pull request #3 from mushi0ma/feature/notifier-bot
+[31m|[m [1;31m|[m[1;32m\[m [35m\[m  
+[31m|[m [1;31m|[m * [35m|[m [33m5ba1a7b[m celerybeat going
+[31m|[m [1;31m|[m * [35m|[m [33m486c5e4[m working on notifications center
+[31m|[m [1;31m|[m * [35m|[m [33m15076e5[m some changes in main bots
+[31m|[m [1;31m|[m * [35m|[m [33m862eefe[m still working
+[31m|[m [1;31m|[m * [35m|[m [33m976ebbe[m I am working on adding more funcs to msg sender
+[31m|[m [1;31m|[m * [35m|[m [33m73d9ff9[m changed db structure
+[31m|[m [1;31m|[m [1;32m|[m * [33mfde90f9[m Refactor test suite to use pytest and an isolated test database
+[31m|[m [1;31m|[m [1;32m|[m[1;31m/[m  
+[31m|[m [1;31m|[m[1;31m/[m[1;32m|[m   
+[31m|[m * [1;32m|[m [33m47f647e[m Merge pull request #2 from mushi0ma/feature/notifier-bot
+[31m|[m [1;33m|[m[1;32m\[m[1;32m|[m 
+[31m|[m [1;33m|[m * [33m4318e48[m new branch for adding one cool function
+[31m|[m [1;33m|[m[1;33m/[m  
+* [1;33m/[m [33m0f4f93a[m new change for celerybeat
+[1;33m|[m[1;33m/[m  
+* [33m6a7cf88[m deleted some folders
+* [33m97c9e0b[m merged everything
+*   [33mf480e2b[m Merge branch 'main'
+[1;35m|[m[1;36m\[m  
+[1;35m|[m * [33mb6ef5c4[m i changed utils for db
+[1;35m|[m * [33m0e864e8[m first testing file is almost ready
+[1;35m|[m * [33ma45e9bb[m now password is replaced, not deleted after sending
+[1;35m|[m * [33mcc70efe[m adding some decorations
+[1;35m|[m * [33mb35f8af[m now when you set new password you also confirm it
+[1;35m|[m * [33mf0f9f49[m tried to fix one bug with deleting account
+[1;35m|[m * [33m0a2d853[m now user confirms password before saving it
+[1;35m|[m * [33md17164e[m now one bug with username is solved
+[1;35m|[m * [33m0d8e806[m delete user profile by himself
+[1;35m|[m * [33m2f51bcf[m changed rating history
+[1;35m|[m * [33m25e82cb[m added one detail
+[1;35m|[m * [33m1937701[m grading after return
+[1;35m|[m * [33m202cb13[m update in admin panel
+[1;35m|[m * [33m61e7259[m admin now can delete users
+[1;35m|[m * [33m00f65c7[m i changed admin funcs again
+[1;35m|[m * [33m1881ab5[m added calculating users ages
+[1;35m|[m * [33ma951216[m changing admin functions
+[1;35m|[m * [33mafda3e2[m borrow book select in messagehandler
+[1;35m|[m * [33ma8941f7[m changed book borrowing funcs
+[1;35m|[m * [33m658c942[m i renamed one file
+[1;35m|[m * [33me5b9776[m changed db and main  logics
+[1;35m|[m * [33m28bf610[m i changed some funcs
+[1;35m|[m * [33m08b9265[m added something to one of psql funcs
+[1;35m|[m * [33m0f482d6[m i upgraded db management
+[1;35m|[m * [33m3eee878[m i upgraded book search functions
+[1;35m|[m * [33m6530e30[m i added async function for stats response
+[1;35m|[m * [33m53f5f1a[m i changed yaml and parted two bots
+[1;35m|[m * [33m065e9e6[m i removed pywhatkit and whatsapp verification for a moment
+[1;35m|[m * [33mc8d7852[m i changed env and added some files
+[1;35m|[m * [33m2c1a1fc[m i changed env and docker compose
+[1;35m|[m *   [33mfc33a8a[m Merge pull request #1 from mushi0ma/refactor-and-enhance-bot
+[1;35m|[m [31m|[m[32m\[m  
+[1;35m|[m [31m|[m *   [33me7a2eed[m[33m ([m[1;31morigin/refactor-and-enhance-bot[m[33m)[m Merge branch 'main' into refactor-and-enhance-bot
+[1;35m|[m [31m|[m [33m|[m[31m\[m  
+[1;35m|[m [31m|[m [33m|[m[31m/[m  
+[1;35m|[m [31m|[m[31m/[m[33m|[m   
+[1;35m|[m [31m|[m * [33m0989295[m Refactor, Test, and Enhance Telegram Bot Project
+* [31m|[m [34m|[m [33m6814289[m Cleanup: Consolidate project structure into root directory
+[31m|[m[31m/[m [34m/[m  
+* [34m|[m [33m99a9391[m Create docker-image.yml
+* [34m|[m [33mfe9bf24[m Add files via upload
+[34m|[m[34m/[m  
+* [33m97877e5[m Initial commit
