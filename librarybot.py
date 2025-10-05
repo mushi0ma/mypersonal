@@ -1015,7 +1015,7 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
-    return SHOWING_GENRES
+    return SHOWING_GENRE_BOOKS
 
 async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог поиска книги по ключевому слову."""
