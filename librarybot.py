@@ -299,8 +299,10 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         context.user_data.clear()
         return await start(update, context)
     except Exception as e:
-        logger.error(f"Непредвиденная ошибка при регистрации: {e}")
-        await update.message.reply_text("❌ Произошла системная ошибка.")
+        logger.error(f"Непредвиденная ошибка при регистрации: {e}", exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
+        tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при регистрации**\n\n**Функция:** `get_password_confirmation`\n**Ошибка:** `{e}`")
+        await update.message.reply_text("❌ Произошла системная ошибка. Администратор уже уведомлен.")
         context.user_data.clear()
         return await start(update, context)
     
@@ -332,8 +334,11 @@ async def check_notification_subscription(update: Update, context: ContextTypes.
             return AWAITING_NOTIFICATION_BOT
             
     except Exception as e:
-        logger.error(f"Ошибка при проверке подписки для user_id {user_id}: {e}")
-        await query.edit_message_text("❌ Произошла системная ошибка при проверке подписки.")
+        user_id = context.user_data.get('user_id_for_activation', 'Неизвестно')
+        logger.error(f"Ошибка при проверке подписки для user_id {user_id}: {e}", exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
+        tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при проверке подписки**\n\n**UserID:** `{user_id}`\n**Ошибка:** `{e}`")
+        await query.edit_message_text("❌ Произошла системная ошибка при проверке подписки. Администратор уведомлен.")
         return ConversationHandler.END
 
 # --- ФУНКЦИИ ВХОДА ---
@@ -438,8 +443,10 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
             db_data.update_user_password(conn, login_query, final_password)
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти.")
     except Exception as e:
-        logger.error(f"Ошибка при обновлении пароля: {e}")
-        await update.message.reply_text("❌ Произошла ошибка при обновлении пароля. Попробуйте позже.")
+        logger.error(f"Ошибка при обновлении пароля: {e}", exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
+        tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при обновлении пароля**\n\n**Функция:** `confirm_new_password`\n**Ошибка:** `{e}`")
+        await update.message.reply_text("❌ Произошла ошибка при обновлении пароля. Администратор уведомлен. Попробуйте позже.")
         return FORGOT_PASSWORD_SET_NEW
     context.user_data.clear()
     return await start(update, context)
@@ -604,11 +611,11 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Ошибка: книга не найдена.")
         return await user_menu(update, context)
     except Exception as e:
-        error_text = f"❌ Непредвиденная ошибка: {e}"
+        error_text = f"❌ Непредвиденная ошибка. Мы уже работаем над этим."
         logger.error(f"Критическая ошибка в process_borrow_selection: {e}", exc_info=True)
-        # Отправляем аудит-уведомление
+        # --- УВЕДОМЛЕНИЕ АДМИНУ (уже было, но можно улучшить) ---
         tasks.notify_admin.delay(
-            text=f"❗ **Критическая ошибка в `librarybot`**\n\n**Функция:** `process_borrow_selection`\n**Ошибка:** `{e}`",
+            text=f"❗️ **Критическая ошибка в `librarybot`**\n\n**Функция:** `process_borrow_selection`\n**Ошибка:** `{e}`",
             category='error'
         )
         await query.edit_message_text(error_text)
@@ -692,8 +699,10 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await query.edit_message_text(f"❌ Не удалось вернуть: {result}")
                 return await user_menu(update, context)
     except Exception as e:
-        logger.error(f"Ошибка при возврате книги: {e}")
-        await query.edit_message_text("❌ Непредвиденная ошибка.")
+        logger.error(f"Ошибка при возврате книги: {e}", exc_info=True)
+        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
+        tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при возврате книги**\n\n**Функция:** `process_return_book`\n**Ошибка:** `{e}`")
+        await query.edit_message_text("❌ Непредвиденная ошибка. Администратор уже уведомлен.")
         return await user_menu(update, context)
 
 async def initiate_rating_from_return(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
