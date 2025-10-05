@@ -357,6 +357,9 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         with get_db_connection() as conn:
             user = db_data.get_user_by_login(conn, contact_processed)
         context.user_data['login_user'] = user
+
+        context.user_data['login_attempts'] = 0
+
         await update.message.reply_text("🔑 Введите ваш **пароль**:", parse_mode='Markdown')
         return LOGIN_PASSWORD
     except db_data.NotFoundError:
@@ -367,16 +370,43 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
     user = context.user_data['login_user']
     stored_hash = user['password_hash']
     input_password = update.message.text
+
     if hash_password(input_password) == stored_hash:
+        # --- Успешный вход ---
         with get_db_connection() as conn:
             db_data.log_activity(conn, user_id=user['id'], action="login")
+        
+        # Очищаем счетчик неудачных попыток
+        context.user_data.pop('login_attempts', None)
+        
         await update.message.reply_text(f"🎉 Добро пожаловать, {user['full_name']}!")
         context.user_data['current_user'] = user
         context.user_data.pop('login_user')
         return await user_menu(update, context)
     else:
-        await update.message.reply_text("❌ Неверный пароль. Попробуйте снова.")
-        return LOGIN_PASSWORD
+        # --- Неудачный вход ---
+        # Увеличиваем счетчик
+        attempts = context.user_data.get('login_attempts', 0) + 1
+        context.user_data['login_attempts'] = attempts
+
+        # Проверяем, достигнут ли порог
+        if attempts >= 3:
+            # Отправляем уведомление администратору
+            admin_text = (
+                f"🔑 **[АУДИТ БЕЗОПАСНОСТИ]**\n\n"
+                f"Замечено {attempts} неудачных попытки входа для пользователя "
+                f"@{user.get('username', user.get('contact_info'))}."
+            )
+            tasks.notify_admin.delay(text=admin_text, category='security_alert')
+            
+            # Сбрасываем счетчик, чтобы не спамить
+            context.user_data['login_attempts'] = 0
+            
+            await update.message.reply_text("❌ Неверный пароль. Вы исчерпали количество попыток. Попробуйте восстановить пароль.")
+            return await start_login(update, context) # Возвращаем на начало входа
+        else:
+            await update.message.reply_text(f"❌ Неверный пароль. Осталось попыток: {3 - attempts}.")
+            return LOGIN_PASSWORD
 
 # --- ФУНКЦИИ ВОССТАНОВЛЕНИЯ ПАРОЛЯ ---
 
