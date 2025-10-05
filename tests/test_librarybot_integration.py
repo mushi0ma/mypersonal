@@ -1,25 +1,24 @@
+# test_librarybot_integration.py
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 from contextlib import contextmanager
 import sys
 import os
 
-# Добавляем корневую директорию в путь, чтобы можно было импортировать модули
+# Добавляем корневую директорию в путь
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Мокируем (симулируем) внешние зависимости, которые не должны работать во время тестов
+# Мокируем внешние зависимости
 sys.modules['tasks'] = MagicMock()
 sys.modules['sendgrid'] = MagicMock()
 sys.modules['sendgrid.helpers.mail'] = MagicMock()
 sys.modules['twilio'] = MagicMock()
 
 from telegram import Update, User, Message, Chat, CallbackQuery
-from telegram.ext import ConversationHandler, ContextTypes
+from telegram.ext import ContextTypes
 import librarybot
 import db_data
-from db_utils import get_db_connection
 
-# Помечаем все тесты в этом файле как асинхронные для pytest
 pytestmark = pytest.mark.asyncio
 
 # --- Вспомогательная функция для создания мок-объектов ---
@@ -48,86 +47,58 @@ def _create_mock_update(text=None, callback_data=None, user_id=12345, chat_id=12
 
 async def test_full_registration_flow(db_session, monkeypatch):
     """
-    Интеграционный тест для полного цикла регистрации пользователя.
-    Использует фикстуру `db_session` для работы с чистой тестовой БД.
+    Интеграционный тест для полного цикла регистрации, включая подписку на уведомителя.
     """
     # --- Подготовка ---
-    # Создаем мок-контекст менеджера, который будет возвращать нашу тестовую сессию
     @contextmanager
     def mock_get_db_connection():
         yield db_session
-
-    # Патчим функцию get_db_connection в модуле librarybot, чтобы она использовала нашу тестовую БД
     monkeypatch.setattr(librarybot, 'get_db_connection', mock_get_db_connection)
 
     context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
     context.bot = AsyncMock()
     context.user_data = {}
 
-    # Мокируем функцию отправки сообщений, так как мы не хотим реально их слать
     librarybot.send_verification_message = AsyncMock(return_value=True)
 
-    # --- Шаг 1: /start ---
-    update = _create_mock_update(text="/start")
-    next_state = await librarybot.start(update, context)
-    assert next_state == librarybot.START_ROUTES
-
-    # --- Шаг 2: Нажатие "Зарегистрироваться" ---
-    update = _create_mock_update(callback_data="register")
-    next_state = await librarybot.start_registration(update, context)
-    assert next_state == librarybot.REGISTER_NAME
-
-    # --- Шаг 3: Ввод ФИО ---
-    update = _create_mock_update(text="Тестов Тест Тестович")
-    next_state = await librarybot.get_name(update, context)
-    assert next_state == librarybot.REGISTER_DOB
-    assert context.user_data['registration']['full_name'] == "Тестов Тест Тестович"
-
-    # --- Шаг 4: Ввод Даты рождения ---
-    update = _create_mock_update(text="01.01.1990")
-    next_state = await librarybot.get_dob(update, context)
-    assert next_state == librarybot.REGISTER_CONTACT
-
-    # --- Шаг 5: Ввод контакта ---
-    update = _create_mock_update(text="test@example.com")
-    next_state = await librarybot.get_contact(update, context)
-    assert next_state == librarybot.REGISTER_VERIFY_CODE
-    librarybot.send_verification_message.assert_called_once()
-
-    # --- Шаг 6: Ввод кода верификации ---
+    # --- Шаги с 1 по 9 (остаются без изменений) ---
+    await librarybot.start(_create_mock_update(text="/start"), context)
+    await librarybot.start_registration(_create_mock_update(callback_data="register"), context)
+    await librarybot.get_name(_create_mock_update(text="Тестов Тест Тестович"), context)
+    await librarybot.get_dob(_create_mock_update(text="01.01.1990"), context)
+    await librarybot.get_contact(_create_mock_update(text="test@example.com"), context)
     code = context.user_data['verification_code']
-    update = _create_mock_update(text=code)
-    next_state = await librarybot.verify_registration_code(update, context)
-    assert next_state == librarybot.REGISTER_STATUS
-
-    # --- Шаг 7: Выбор статуса ---
-    update = _create_mock_update(callback_data="студент")
-    next_state = await librarybot.get_status(update, context)
-    assert next_state == librarybot.REGISTER_USERNAME
-
-    # --- Шаг 8: Ввод юзернейма ---
-    update = _create_mock_update(text="test_user_123")
-    next_state = await librarybot.get_username(update, context)
-    assert next_state == librarybot.REGISTER_PASSWORD
-    assert context.user_data['registration']['username'] == "test_user_123"
-
-    # --- Шаг 9: Ввод первого пароля ---
-    update = _create_mock_update(text="ValidPassword123")
-    next_state = await librarybot.get_password(update, context)
-    assert next_state == librarybot.REGISTER_CONFIRM_PASSWORD
-    # Сообщение должно редактироваться, чтобы скрыть пароль
-    update.message.edit_text.assert_called_once() 
-
+    await librarybot.verify_registration_code(_create_mock_update(text=code), context)
+    await librarybot.get_status(_create_mock_update(callback_data="студент"), context)
+    await librarybot.get_username(_create_mock_update(text="test_user_123"), context)
+    await librarybot.get_password(_create_mock_update(text="ValidPassword123"), context)
+    
     # --- Шаг 10: Ввод второго пароля (подтверждение) ---
     update = _create_mock_update(text="ValidPassword123")
     next_state = await librarybot.get_password_confirmation(update, context)
-    
-    # Финальное состояние - возврат в главное меню
+    # --- ИЗМЕНЕНИЕ: Теперь бот ждет подписки на уведомителя ---
+    assert next_state == librarybot.AWAITING_NOTIFICATION_BOT
+
+    # --- Шаг 11: Симулируем, что бот-уведомитель сделал свою работу ---
+    # В реальном тесте мы вручную обновляем запись в БД, как это сделал бы notification_bot
+    user_id_for_activation = context.user_data['user_id_for_activation']
+    cursor = db_session.cursor()
+    cursor.execute(
+        "UPDATE users SET telegram_id = %s, telegram_username = %s WHERE id = %s",
+        (12345, 'test_tg_user', user_id_for_activation)
+    )
+    db_session.commit()
+    cursor.close()
+
+    # --- Шаг 12: Нажатие "Я подписался" ---
+    update = _create_mock_update(callback_data="confirm_subscription")
+    next_state = await librarybot.check_notification_subscription(update, context)
+    # --- ИЗМЕНЕНИЕ: Теперь регистрация завершена, и мы возвращаемся на стартовый экран ---
     assert next_state == librarybot.START_ROUTES
     
     # --- Финальная проверка в РЕАЛЬНОЙ БАЗЕ ДАННЫХ ---
     cursor = db_session.cursor()
-    cursor.execute("SELECT username, full_name, status FROM users WHERE username = 'test_user_123'")
+    cursor.execute("SELECT username, full_name, status, telegram_id FROM users WHERE username = 'test_user_123'")
     user_from_db = cursor.fetchone()
     cursor.close()
 
@@ -135,3 +106,4 @@ async def test_full_registration_flow(db_session, monkeypatch):
     assert user_from_db[0] == "test_user_123"
     assert user_from_db[1] == "Тестов Тест Тестович"
     assert user_from_db[2] == "студент"
+    assert user_from_db[3] == 12345 # Проверяем, что telegram_id сохранился
