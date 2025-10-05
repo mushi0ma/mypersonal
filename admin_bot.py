@@ -196,10 +196,17 @@ async def process_delete_confirmation(update: Update, context: ContextTypes.DEFA
     current_page = context.user_data.get('current_stats_page', 0)
     try:
         with get_db_connection() as conn:
+            user_to_delete = db_data.get_user_by_id(conn, user_id)
+            username = user_to_delete.get('username', f'ID: {user_id}')
             result = db_data.delete_user_by_admin(conn, user_id)
+        
+        admin_text = f"🗑️ Админ удалил (анонимизировал) пользователя: @{username}"
+        tasks.notify_admin.delay(text=admin_text, category='admin_action')
+
         await query.edit_message_text(f"✅ Пользователь успешно удален (анонимизирован).")
     except Exception as e:
         await query.edit_message_text(f"❌ Ошибка при удалении: {e}")
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `process_delete_confirmation`\n**Ошибка:** `{e}`")
     query.data = f"stats_page_{current_page}"
     await stats(update, context)
 
@@ -415,8 +422,14 @@ async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         with get_db_connection() as conn:
+            book_before_update = db_data.get_book_details(conn, book_id)
+            book_name = book_before_update.get('name', f'ID: {book_id}')
+
             db_data.update_book_field(conn, book_id, field, new_value)
             content = _build_book_details_content(conn, book_id, current_page)
+
+        admin_text = f"✏️ Админ отредактировал поле `{field}` для книги «{book_name}»."
+        tasks.notify_admin.delay(text=admin_text, category='admin_action')
 
         await update.message.reply_text("✅ Информация о книге успешно обновлена!")
 
@@ -438,6 +451,7 @@ async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     except Exception as e:
         await update.message.reply_text(f"❌ Произошла ошибка при обновлении: {e}")
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `process_book_update`\n**Ошибка:** `{e}`")
         
     finally:
         context.user_data.pop('book_to_edit', None)
@@ -475,11 +489,18 @@ async def process_book_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         with get_db_connection() as conn:
+            book_to_delete = db_data.get_book_details(conn, book_id)
+            book_name = book_to_delete.get('name', f'ID: {book_id}')
             db_data.delete_book(conn, book_id)
+
+        admin_text = f"🗑️ Админ удалил книгу «{book_name}» из каталога."
+        tasks.notify_admin.delay(text=admin_text, category='admin_action')
+
         await query.edit_message_caption(caption="✅ Книга успешно удалена из каталога.")
 
     except Exception as e:
         await query.edit_message_caption(caption=f"❌ Ошибка при удалении книги: {e}")
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `process_book_delete`\n**Ошибка:** `{e}`")
 
     # Имитируем нажатие на кнопку "Назад", чтобы показать обновленный список книг
     query.data = f"books_page_{current_page}"
