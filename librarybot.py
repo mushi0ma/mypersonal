@@ -1299,6 +1299,7 @@ def main() -> None:
             CallbackQueryHandler(start_search, pattern="^search_book$"),
             CallbackQueryHandler(show_top_books, pattern="^top_books$"),
             edit_profile_handler,
+            CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
         ],
         USER_BORROW_BOOK_SELECT: [

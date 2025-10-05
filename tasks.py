@@ -138,3 +138,35 @@ def notify_user(user_id: int, text: str, category: str = 'system', button_text: 
         print(f"✅ Уведомление '{category}' для user_id={user_id} отправлено на telegram_id={telegram_id}.")
     except Exception as e:
         print(f"❌ Ошибка в задаче notify_user для user_id={user_id}: {e}")
+
+@celery_app.task
+def broadcast_new_book(book_id: int):
+    """Рассылает уведомление о новой книге всем пользователям."""
+    print(f"Запущена рассылка о новой книге с ID: {book_id}")
+    try:
+        with get_db_connection() as conn:
+            # Получаем полную информацию о книге
+            book = db_data.get_book_card_details(conn, book_id)
+            # Получаем всех пользователей, которых нужно уведомить
+            all_user_ids = db_data.get_all_user_ids(conn)
+        
+        text = (
+            f"🆕 **В библиотеке пополнение!**\n\n"
+            f"Книга «{book['name']}» от автора {book['author']} была добавлена в каталог."
+        )
+        button_text = "📖 Посмотреть карточку книги"
+        button_callback = f"view_book_{book_id}"
+
+        for user_id in all_user_ids:
+            notify_user.delay(
+                user_id=user_id,
+                text=text,
+                category='new_arrival',
+                button_text=button_text,
+                button_callback=button_callback
+            )
+        print(f"Рассылка о новой книге завершена для {len(all_user_ids)} пользователей.")
+        notify_admin.delay(f"🚀 Успешно разослано уведомление о новой книге «{book['name']}» для {len(all_user_ids)} пользователей.")
+    except Exception as e:
+        print(f"❌ Ошибка в задаче broadcast_new_book: {e}")
+        notify_admin.delay(f"❗️ Ошибка при рассылке о новой книге (ID: {book_id}): {e}")

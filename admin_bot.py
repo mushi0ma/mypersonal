@@ -560,14 +560,21 @@ async def show_add_confirmation(update: Update, context: ContextTypes.DEFAULT_TY
     ]
     message_text = "\n".join(message_parts)
 
+    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
     keyboard = [
         [
-            InlineKeyboardButton("✅ Сохранить", callback_data="add_book_save"),
+            InlineKeyboardButton("✅ Сохранить", callback_data="add_book_save_simple"),
+        ],
+        [
+            InlineKeyboardButton("🚀 Сохранить и уведомить всех", callback_data="add_book_save_notify"),
+        ],
+        [
             InlineKeyboardButton("❌ Отмена", callback_data="add_book_cancel")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # ... остальная часть функции без изменений
     if book_data.get('cover_image_id'):
         await update.message.reply_photo(
             photo=book_data['cover_image_id'],
@@ -583,15 +590,27 @@ async def show_add_confirmation(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 async def add_book_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Сохраняет новую книгу в БД."""
+    """Сохраняет новую книгу в БД и опционально запускает рассылку."""
     query = update.callback_query
     await query.answer()
+    
+    # Определяем, нужно ли отправлять уведомление
+    should_notify = "_notify" in query.data
+    
     book_data = context.user_data.pop('new_book', None)
 
     try:
         with get_db_connection() as conn:
-            db_data.add_new_book(conn, book_data)
-        await query.edit_message_caption(caption="✅ Новая книга успешно добавлена в каталог!", reply_markup=None)
+            # add_new_book возвращает ID новой книги, это нам понадобится
+            new_book_id = db_data.add_new_book(conn, book_data)
+        
+        if should_notify:
+            await query.edit_message_caption(caption="✅ Книга сохранена. Запускаю рассылку о новинке...", reply_markup=None)
+            # Вызываем новую задачу Celery
+            tasks.broadcast_new_book.delay(book_id=new_book_id)
+        else:
+            await query.edit_message_caption(caption="✅ Новая книга успешно добавлена в каталог!", reply_markup=None)
+
     except Exception as e:
         await query.edit_message_caption(caption=f"❌ Ошибка при сохранении книги: {e}", reply_markup=None)
     
@@ -624,7 +643,8 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, skip_cover)
             ],
             CONFIRM_ADD: [
-                CallbackQueryHandler(add_book_save, pattern="^add_book_save$"),
+            # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+                CallbackQueryHandler(add_book_save, pattern="^add_book_save_"), 
                 CallbackQueryHandler(add_book_cancel, pattern="^add_book_cancel$")
             ]
         },
