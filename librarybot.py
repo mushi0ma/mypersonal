@@ -1215,6 +1215,9 @@ def main() -> None:
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
             CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
         ],
+        AWAITING_NOTIFICATION_BOT: [
+            CallbackQueryHandler(check_notification_subscription, pattern="^confirm_subscription$")
+        ],
     }
 
     conv_handler = ConversationHandler(
