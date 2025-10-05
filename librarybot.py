@@ -300,12 +300,11 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         return await start(update, context)
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}", exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при регистрации**\n\n**Функция:** `get_password_confirmation`\n**Ошибка:** `{e}`")
         await update.message.reply_text("❌ Произошла системная ошибка. Администратор уже уведомлен.")
         context.user_data.clear()
         return await start(update, context)
-    
+
 async def check_notification_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Проверяет, привязал ли пользователь telegram_id через бота-уведомителя."""
     query = update.callback_query
@@ -336,9 +335,8 @@ async def check_notification_subscription(update: Update, context: ContextTypes.
     except Exception as e:
         user_id = context.user_data.get('user_id_for_activation', 'Неизвестно')
         logger.error(f"Ошибка при проверке подписки для user_id {user_id}: {e}", exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при проверке подписки**\n\n**UserID:** `{user_id}`\n**Ошибка:** `{e}`")
-        await query.edit_message_text("❌ Произошла системная ошибка при проверке подписки. Администратор уведомлен.")
+        await query.edit_message_text("❌ Произошла системная ошибка. Администратор уведомлен.")
         return ConversationHandler.END
 
 # --- ФУНКЦИИ ВХОДА ---
@@ -444,9 +442,8 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("🎉 Пароль успешно обновлен! Теперь вы можете войти.")
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля: {e}", exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при обновлении пароля**\n\n**Функция:** `confirm_new_password`\n**Ошибка:** `{e}`")
-        await update.message.reply_text("❌ Произошла ошибка при обновлении пароля. Администратор уведомлен. Попробуйте позже.")
+        await update.message.reply_text("❌ Произошла ошибка. Администратор уведомлен. Попробуйте позже.")
         return FORGOT_PASSWORD_SET_NEW
     context.user_data.clear()
     return await start(update, context)
@@ -700,7 +697,6 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return await user_menu(update, context)
     except Exception as e:
         logger.error(f"Ошибка при возврате книги: {e}", exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ АДМИНУ ---
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при возврате книги**\n\n**Функция:** `process_return_book`\n**Ошибка:** `{e}`")
         await query.edit_message_text("❌ Непредвиденная ошибка. Администратор уже уведомлен.")
         return await user_menu(update, context)
