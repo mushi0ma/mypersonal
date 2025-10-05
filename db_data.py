@@ -492,13 +492,35 @@ def delete_book(conn, book_id: int):
         cur.execute("DELETE FROM books WHERE id = %s", (book_id,))
     return True
 
+def get_or_create_author(conn, author_name: str) -> int:
+    """Находит автора по имени или создает нового, если он не найден. Возвращает ID автора."""
+    with conn.cursor() as cur:
+        # Пытаемся найти существующего автора
+        cur.execute("SELECT id FROM authors WHERE name = %s", (author_name,))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        else:
+            # Если не найден, создаем нового и возвращаем его ID
+            cur.execute("INSERT INTO authors (name) VALUES (%s) RETURNING id", (author_name,))
+            return cur.fetchone()[0]
+
 def add_new_book(conn, book_data: dict):
-    """Добавляет новую книгу в базу данных."""
+    """Добавляет новую книгу, находя или создавая автора."""
+    # Получаем ID автора, используя нашу новую функцию
+    author_id = get_or_create_author(conn, book_data['author'])
+
     sql = """
-        INSERT INTO books (name, author, genre, description, cover_image_id)
-        VALUES (%(name)s, %(author)s, %(genre)s, %(description)s, %(cover_image_id)s)
+        INSERT INTO books (name, author_id, genre, description, cover_image_id, total_quantity, available_quantity)
+        VALUES (%(name)s, %(author_id)s, %(genre)s, %(description)s, %(cover_image_id)s, %(total_quantity)s, %(available_quantity)s)
         RETURNING id;
     """
+    # Добавляем author_id в словарь данных для вставки
+    book_data['author_id'] = author_id
+    # Устанавливаем количество книг по умолчанию, если не передано
+    book_data.setdefault('total_quantity', 1)
+    book_data.setdefault('available_quantity', 1)
+
     with conn.cursor() as cur:
         cur.execute(sql, book_data)
         new_book_id = cur.fetchone()[0]
@@ -512,31 +534,31 @@ def get_unique_genres(conn):
     return genres
 
 def get_available_books_by_genre(conn, genre: str, limit: int, offset: int):
-    """Возвращает порцию свободных книг указанного жанра и их общее количество."""
+    """Возвращает порцию свободных книг (оптимизированная версия с LEFT JOIN)."""
     with conn.cursor() as cur:
-        # 1. Находим ID книг, которые сейчас на руках
-        cur.execute("SELECT book_id FROM borrowed_books WHERE return_date IS NULL")
-        borrowed_ids = {row[0] for row in cur.fetchall()}
-        borrowed_ids_tuple = tuple(borrowed_ids) if borrowed_ids else (None,)
-
-        # 2. Считаем общее количество доступных книг в жанре
+        # Сначала считаем общее количество, используя тот же подход
         cur.execute(
-            "SELECT COUNT(*) FROM books WHERE genre = %s AND id NOT IN %s",
-            (genre, borrowed_ids_tuple)
+            """
+            SELECT COUNT(b.id)
+            FROM books b
+            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
+            WHERE b.genre = %s AND bb.borrow_id IS NULL;
+            """, (genre,)
         )
         total_books = cur.fetchone()[0]
 
-        # 3. Получаем порцию книг для текущей страницы
+        # Затем получаем срез для страницы
         cur.execute(
             """
             SELECT b.id, b.name, a.name as author
             FROM books b
             JOIN authors a ON b.author_id = a.id
-            WHERE b.genre = %s AND b.id NOT IN %s
+            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
+            WHERE b.genre = %s AND bb.borrow_id IS NULL
             ORDER BY b.name
-            LIMIT %s OFFSET %s
+            LIMIT %s OFFSET %s;
             """,
-            (genre, borrowed_ids_tuple, limit, offset)
+            (genre, limit, offset)
         )
         rows = cur.fetchall()
         columns = [desc[0] for desc in cur.description]
