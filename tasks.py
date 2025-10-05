@@ -106,33 +106,36 @@ def broadcast_new_book(book_id: int):
 
 @celery_app.task
 def check_due_dates_and_notify():
-    """Проверяет сроки сдачи книг и уведомляет должников и администратора."""
+    """
+    Проверяет книги с истекшим сроком и те, у которых срок скоро истечет,
+    и отправляет соответствующие уведомления.
+    """
     print("Выполняется периодическая задача: проверка сроков сдачи книг...")
     try:
         with get_db_connection() as conn:
-            # Проверка просроченных книг
+            # --- Блок 1: Проверка просроченных книг ---
             overdue_entries = db_data.get_users_with_overdue_books(conn)
             if overdue_entries:
+                print(f"Найдено просроченных книг: {len(overdue_entries)}")
                 for entry in overdue_entries:
                     user_id, username, book_name, due_date = entry['user_id'], entry['username'], entry['book_name'], entry['due_date']
                     due_date_str = due_date.strftime('%d.%m.%Y')
+                    
                     user_text = f"❗️ **Просрочка:** Срок возврата «{book_name}» истек {due_date_str}! Пожалуйста, верните ее."
-                    notify_user.delay(user_id=user_id, text=user_text, category='due_date')
+                    notify_user(user_id=user_id, text=user_text, category='due_date') # <-- Вызов без .delay()
+                    
                     admin_text = f"❗️Пользователь @{username} просрочил «{book_name}» (срок: {due_date_str})."
-                    notify_admin.delay(text=admin_text, category='overdue')
+                    notify_admin(text=admin_text, category='overdue') # <-- Вызов без .delay()
 
-            # Проверка книг, у которых скоро истекает срок
+            # --- Блок 2: Проверка книг, у которых скоро истекает срок ---
             due_soon_entries = db_data.get_users_with_books_due_soon(conn, days_ahead=2)
             if due_soon_entries:
                 print(f"Найдено книг с подходящим сроком возврата: {len(due_soon_entries)}")
                 for entry in due_soon_entries:
-                    user_id, book_name = entry['user_id'], entry['book_name']
-                    borrow_id = entry['borrow_id'] # Получаем ID займа
-                    
+                    user_id, book_name, borrow_id = entry['user_id'], entry['book_name'], entry['borrow_id']
                     user_text = f"🔔 **Напоминание:** Срок возврата книги «{book_name}» истекает через 2 дня."
                     
-                    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
-                    notify_user.delay(
+                    notify_user( # <-- Вызов без .delay()
                         user_id=user_id, 
                         text=user_text, 
                         category='due_date_reminder',
@@ -146,9 +149,10 @@ def check_due_dates_and_notify():
     except Exception as e:
         error_message = f"❗️ **Критическая ошибка в периодической задаче**\n\n`check_due_dates_and_notify`:\n`{e}`"
         print(f"❌ {error_message}")
-        notify_admin.delay(text=error_message, category='error')
+        notify_admin(text=error_message, category='error') # <-- Вызов без .delay()
 
 # --- Расписание для периодических задач (Celery Beat) ---
+# Этот блок остается без изменений
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
         'task': 'tasks.check_due_dates_and_notify',
