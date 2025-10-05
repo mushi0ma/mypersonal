@@ -56,7 +56,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     # --- Новые состояния для редактирования профиля ---
     EDIT_PROFILE_MENU, EDITING_FULL_NAME, EDITING_CONTACT,
     EDITING_PASSWORD_CURRENT, EDITING_PASSWORD_NEW, EDITING_PASSWORD_CONFIRM,
-    AWAITING_NOTIFICATION_BOT
+    AWAITING_NOTIFICATION_BOT,
+    AWAIT_CONTACT_VERIFICATION_CODE
 ) = range(36)
 
 
@@ -845,8 +846,9 @@ async def select_field_to_edit(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("✏️ Введите новое ФИО:")
         return EDITING_FULL_NAME
     elif field == "contact_info":
-        await query.edit_message_text("📞 Введите новый контакт (email или телефон):")
-        return EDITING_CONTACT
+        await query.edit_message_text("📞 Введите **новый** контакт (email или телефон):", parse_mode='Markdown')
+        # Меняем состояние на ожидание нового контакта
+        return EDITING_CONTACT 
     elif field == "password":
         await query.edit_message_text("🔐 Для безопасности, введите ваш **текущий** пароль:", parse_mode='Markdown')
         return EDITING_PASSWORD_CURRENT
@@ -863,19 +865,33 @@ async def process_full_name_edit(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 async def process_contact_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обновляет контакт пользователя."""
+    """Получает новый контакт, проверяет его на уникальность и отправляет код."""
     new_contact = normalize_phone_number(update.message.text)
     user_id = context.user_data['current_user']['id']
+    
     try:
+        # Проверим, не занят ли этот контакт кем-то другим
         with get_db_connection() as conn:
-            db_data.update_user_contact(conn, user_id, new_contact)
-            context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
-        await update.message.reply_text("✅ Контакт успешно обновлен!")
-    except db_data.UserExistsError:
-        await update.message.reply_text("❌ Этот контакт уже занят. Попробуйте другой.")
+            if db_data.get_user_by_login(conn, new_contact):
+                await update.message.reply_text("❌ Этот контакт уже занят другим пользователем. Попробуйте другой.")
+                return EDITING_CONTACT # Остаемся в состоянии ввода нового контакта
+    except db_data.NotFoundError:
+        pass # Все хорошо, контакт свободен
+
+    # Сохраняем новый контакт временно и генерируем код
+    context.user_data['new_contact_temp'] = new_contact
+    code = str(random.randint(100000, 999999))
+    context.user_data['verification_code'] = code
+
+    # Отправляем код на НОВЫЙ контакт
+    sent = await send_verification_message(new_contact, code, context, update.effective_user.id)
+    
+    if sent:
+        await update.message.reply_text(f"📲 На ваш новый контакт ({new_contact}) отправлен код. Введите его для подтверждения:")
+        return AWAIT_CONTACT_VERIFICATION_CODE # Переходим в состояние ожидания кода
+    else:
+        await update.message.reply_text("⚠️ Не удалось отправить код. Проверьте правильность введенных данных и попробуйте снова.")
         return EDITING_CONTACT
-    context.user_data['just_edited_profile'] = True
-    return ConversationHandler.END
 
 async def check_current_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Проверяет текущий пароль пользователя."""
@@ -1107,6 +1123,30 @@ async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     return SHOWING_SEARCH_RESULTS
 
+async def verify_new_contact_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Проверяет код и, если он верен, обновляет контакт в БД."""
+    user_code = update.message.text
+    if user_code == context.user_data.get('verification_code'):
+        user_id = context.user_data['current_user']['id']
+        new_contact = context.user_data.get('new_contact_temp')
+        
+        with get_db_connection() as conn:
+            db_data.update_user_contact(conn, user_id, new_contact)
+            # Обновляем данные в сессии
+            context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
+
+        await update.message.reply_text("✅ Контакт успешно обновлен!")
+        
+        # Очистка временных данных
+        context.user_data.pop('verification_code', None)
+        context.user_data.pop('new_contact_temp', None)
+        
+        context.user_data['just_edited_profile'] = True
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("❌ Неверный код. Попробуйте еще раз.")
+        return AWAIT_CONTACT_VERIFICATION_CODE # Остаемся в ожидании правильного кода
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -1122,6 +1162,7 @@ def main() -> None:
             ],
             EDITING_FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_full_name_edit)],
             EDITING_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_contact_edit)],
+            AWAIT_CONTACT_VERIFICATION_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, verify_new_contact_code)],
             EDITING_PASSWORD_CURRENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, check_current_password)],
             EDITING_PASSWORD_NEW: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_new_password)],
             EDITING_PASSWORD_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_and_set_new_password)],
