@@ -1265,6 +1265,25 @@ async def verify_new_contact_code(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ Неверный код. Попробуйте еще раз.")
         return AWAIT_CONTACT_VERIFICATION_CODE # Остаемся в ожидании правильного кода
 
+async def process_book_extension(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает нажатие на кнопку 'Продлить'."""
+    query = update.callback_query
+    await query.answer()
+    
+    borrow_id = int(query.data.split('_')[2])
+    
+    with get_db_connection() as conn:
+        result = db_data.extend_due_date(conn, borrow_id)
+    
+    # result может быть либо новой датой, либо строкой с ошибкой
+    if isinstance(result, datetime):
+        new_due_date_str = result.strftime('%d.%m.%Y')
+        await query.edit_message_text(f"✅ Срок возврата книги успешно продлен до **{new_due_date_str}**.", parse_mode='Markdown')
+    else:
+        await query.edit_message_text(f"⚠️ {result}")
+        
+    return USER_MENU # В любом случае возвращаемся в главное меню
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -1331,6 +1350,7 @@ def main() -> None:
             edit_profile_handler,
             CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
+            CallbackQueryHandler(process_book_extension, pattern=r"^extend_borrow_"),
         ],
         USER_BORROW_BOOK_SELECT: [
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),

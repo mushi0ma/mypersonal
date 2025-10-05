@@ -700,7 +700,8 @@ def get_users_with_books_due_soon(conn, days_ahead: int = 2):
             SELECT 
                 u.id as user_id,
                 b.name as book_name,
-                bb.due_date
+                bb.due_date,
+                bb.borrow_id
             FROM borrowed_books bb
             JOIN users u ON bb.user_id = u.id
             JOIN books b ON bb.book_id = b.id
@@ -710,7 +711,44 @@ def get_users_with_books_due_soon(conn, days_ahead: int = 2):
         )
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
-    
+
+def extend_due_date(conn, borrow_id: int):
+    """
+    Продлевает срок возврата книги, если это возможно.
+    Возвращает новую дату или строку с причиной отказа.
+    """
+    with conn.cursor() as cur:
+        # 1. Получаем информацию о текущем займе
+        cur.execute("SELECT book_id, extensions_count FROM borrowed_books WHERE borrow_id = %s", (borrow_id,))
+        borrow_info = cur.fetchone()
+        if not borrow_info:
+            return "Запись о взятии книги не найдена."
+        
+        book_id, extensions_count = borrow_info
+
+        # 2. Проверяем, не превышен ли лимит продлений
+        if extensions_count >= 1:
+            return "Вы уже продлевали эту книгу. Повторное продление невозможно."
+
+        # 3. Проверяем, нет ли на книгу активных резерваций
+        cur.execute("SELECT 1 FROM reservations WHERE book_id = %s AND notified = FALSE", (book_id,))
+        if cur.fetchone():
+            return "Невозможно продлить: эту книгу уже зарезервировал другой читатель."
+
+        # 4. Если все проверки пройдены, обновляем запись
+        cur.execute(
+            """
+            UPDATE borrowed_books
+            SET due_date = due_date + INTERVAL '7 day',
+                extensions_count = extensions_count + 1
+            WHERE borrow_id = %s
+            RETURNING due_date;
+            """,
+            (borrow_id,)
+        )
+        new_due_date = cur.fetchone()[0]
+        return new_due_date
+
 def get_top_rated_books(conn, limit: int = 5):
     """
     Возвращает список книг с самым высоким средним рейтингом.

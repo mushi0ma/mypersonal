@@ -44,7 +44,8 @@ def initialize_database():
             book_id INTEGER REFERENCES books(id),
             borrow_date DATE NOT NULL DEFAULT CURRENT_DATE,
             due_date DATE NOT NULL,
-            return_date DATE
+            return_date DATE,
+            extensions_count INTEGER DEFAULT 0 NOT NULL -- <-- ДОБАВЛЕНА КОЛОНКА
         );
         """,
         """
