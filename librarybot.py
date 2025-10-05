@@ -57,8 +57,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     EDIT_PROFILE_MENU, EDITING_FULL_NAME, EDITING_CONTACT,
     EDITING_PASSWORD_CURRENT, EDITING_PASSWORD_NEW, EDITING_PASSWORD_CONFIRM,
     AWAITING_NOTIFICATION_BOT,
-    AWAIT_CONTACT_VERIFICATION_CODE
-) = range(36)
+    AWAIT_CONTACT_VERIFICATION_CODE,
+    VIEWING_TOP_BOOKS
+) = range(38)
 
 
 # --------------------------
@@ -477,11 +478,14 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ],
         [
             InlineKeyboardButton("⭐ Оценить книгу", callback_data="user_rate"),
-            InlineKeyboardButton("👤 Профиль", callback_data="user_profile")
+            InlineKeyboardButton("🏆 Топ книг", callback_data="top_books") # <-- ДОБАВЛЕНО
         ],
         [
-            InlineKeyboardButton("📬 Уведомления", callback_data="user_notifications"),
+            InlineKeyboardButton("👤 Профиль", callback_data="user_profile"),
             InlineKeyboardButton("🚪 Выйти", callback_data="logout")
+        ],
+        [ # Кнопку уведомлений можно вынести на отдельную строку для красоты
+            InlineKeyboardButton("📬 Уведомления", callback_data="user_notifications")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1174,6 +1178,39 @@ async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE
         
     return SHOWING_SEARCH_RESULTS
 
+async def show_top_books(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает топ книг по среднему рейтингу."""
+    query = update.callback_query
+    await query.answer()
+
+    with get_db_connection() as conn:
+        top_books = db_data.get_top_rated_books(conn, limit=5)
+
+    message_parts = ["**🏆 Топ-5 книг по оценкам читателей:**\n"]
+    if top_books:
+        for i, book in enumerate(top_books):
+            # Округляем рейтинг и создаем звезды
+            rating = round(float(book['avg_rating'])) 
+            stars = "⭐" * rating
+            # Форматируем средний балл до одного знака после запятой
+            avg_rating_str = f"{float(book['avg_rating']):.1f}"
+            message_parts.append(
+                f"{i+1}. **{book['name']}** - {book['author']}\n"
+                f"   Рейтинг: {stars} ({avg_rating_str}/5.0 на основе {book['votes']} оценок)\n"
+            )
+    else:
+        message_parts.append("_Пока недостаточно данных для составления рейтинга._\n\n_Оценивайте прочитанные книги, чтобы помочь другим!_")
+
+    keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        "\n".join(message_parts), 
+        reply_markup=reply_markup, 
+        parse_mode='Markdown'
+    )
+    return VIEWING_TOP_BOOKS
+
 async def verify_new_contact_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Проверяет код и, если он верен, обновляет контакт в БД."""
     user_code = update.message.text
@@ -1260,6 +1297,7 @@ def main() -> None:
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
             CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
             CallbackQueryHandler(start_search, pattern="^search_book$"),
+            CallbackQueryHandler(show_top_books, pattern="^top_books$"),
             edit_profile_handler,
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
         ],
@@ -1310,6 +1348,9 @@ def main() -> None:
         ],
         AWAITING_NOTIFICATION_BOT: [
             CallbackQueryHandler(check_notification_subscription, pattern="^confirm_subscription$")
+        ],
+        VIEWING_TOP_BOOKS: [
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
     }
 

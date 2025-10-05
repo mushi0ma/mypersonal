@@ -710,3 +710,29 @@ def get_users_with_books_due_soon(conn, days_ahead: int = 2):
         )
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
+    
+def get_top_rated_books(conn, limit: int = 5):
+    """
+    Возвращает список книг с самым высоким средним рейтингом.
+    Учитывает только книги, имеющие 2 или более оценки.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 
+                b.name,
+                a.name as author,
+                AVG(r.rating) as avg_rating,
+                COUNT(r.rating) as votes
+            FROM ratings r
+            JOIN books b ON r.book_id = b.id
+            JOIN authors a ON b.author_id = a.id
+            GROUP BY b.id, a.name
+            HAVING COUNT(r.rating) >= 2 -- Отсекаем книги с одной случайной оценкой
+            ORDER BY avg_rating DESC, votes DESC -- Сортируем по рейтингу, затем по количеству голосов
+            LIMIT %s;
+            """,
+            (limit,)
+        )
+        columns = [desc[0] for desc in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
