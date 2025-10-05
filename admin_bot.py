@@ -299,6 +299,35 @@ async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(error_message)
 
 
+def _build_book_details_content(conn, book_id, current_page=0):
+    """Строит контент для карточки книги (текст и клавиатуру)."""
+    book = db_data.get_book_details(conn, book_id)
+    if not book:
+        raise db_data.NotFoundError("Книга не найдена.")
+
+    message_parts = [
+        f"**📖 Карточка книги: «{book['name']}»**",
+        f"**Автор:** {book['author']}",
+        f"**Жанр:** {book['genre']}",
+        f"**Описание:** {book['description']}\n"
+    ]
+    if book['username']:
+        borrow_date_str = book['borrow_date'].strftime('%d.%m.%Y')
+        message_parts.append(f"🔴 **Статус:** Занята (у @{book['username']} с {borrow_date_str})")
+    else:
+        message_parts.append("🟢 **Статус:** Свободна")
+
+    message_text = "\n".join(message_parts)
+
+    keyboard = [[InlineKeyboardButton("✏️ Редактировать", callback_data=f"admin_edit_book_{book['id']}")]]
+    if not book['username']:
+        keyboard.append([InlineKeyboardButton("🗑️ Удалить", callback_data=f"admin_delete_book_{book['id']}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к списку книг", callback_data=f"books_page_{current_page}")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    return {'text': message_text, 'reply_markup': reply_markup, 'cover_id': book.get('cover_image_id')}
+
+
 async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку книги."""
     query = update.callback_query
@@ -309,52 +338,25 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         with get_db_connection() as conn:
-            book = db_data.get_book_details(conn, book_id)
+            content = _build_book_details_content(conn, book_id, current_page)
 
-        if not book:
-            await query.edit_message_text("❌ Книга не найдена.")
-            return
-
-        message_parts = [
-            f"**📖 Карточка книги: «{book['name']}»**",
-            f"**Автор:** {book['author']}",
-            f"**Жанр:** {book['genre']}",
-            f"**Описание:** {book['description']}\n"
-        ]
-
-        if book['username']:
-            borrow_date_str = book['borrow_date'].strftime('%d.%m.%Y')
-            message_parts.append(f"🔴 **Статус:** Занята (у @{book['username']} с {borrow_date_str})")
+        if content.get('cover_id'):
+            if query.message.photo:
+                 await query.edit_message_caption(caption=content['text'], reply_markup=content['reply_markup'], parse_mode='Markdown')
+            else:
+                await query.message.delete()
+                await context.bot.send_photo(
+                    chat_id=query.message.chat_id,
+                    photo=content['cover_id'],
+                    caption=content['text'],
+                    reply_markup=content['reply_markup'],
+                    parse_mode='Markdown'
+                )
         else:
-            message_parts.append("🟢 **Статус:** Свободна")
-        
-        message_text = "\n".join(message_parts)
+            await query.edit_message_text(text=content['text'], reply_markup=content['reply_markup'], parse_mode='Markdown')
 
-        keyboard = [
-            [InlineKeyboardButton("✏️ Редактировать", callback_data=f"admin_edit_book_{book['id']}")]
-        ]
-
-        # Кнопка удаления появляется только для свободных книг
-        if not book['username']:
-            keyboard.append([InlineKeyboardButton("🗑️ Удалить", callback_data=f"admin_delete_book_{book['id']}")])
-        
-        keyboard.append([InlineKeyboardButton("⬅️ Назад к списку книг", callback_data=f"books_page_{current_page}")])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        # Отправляем фото и текст
-        if book.get('cover_image_id'):
-            await query.message.delete() # Удаляем старое сообщение со списком
-            await context.bot.send_photo(
-                chat_id=query.message.chat_id,
-                photo=book['cover_image_id'],
-                caption=message_text,
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-        else:
-            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-
+    except db_data.NotFoundError:
+        await query.edit_message_text("❌ Книга не найдена.")
     except Exception as e:
         await query.edit_message_text(f"❌ Произошла ошибка при получении деталей книги: {e}")
 
@@ -405,33 +407,41 @@ async def prompt_for_update(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return UPDATING_BOOK_FIELD
 
 async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обновляет информацию о книге в БД и завершает диалог."""
+    """Обновляет информацию о книге в БД и показывает обновленную карточку."""
     new_value = update.message.text
     book_id = context.user_data.get('book_to_edit')
     field = context.user_data.get('field_to_edit')
+    current_page = context.user_data.get('current_books_page', 0)
 
     try:
         with get_db_connection() as conn:
             db_data.update_book_field(conn, book_id, field, new_value)
-        
+            content = _build_book_details_content(conn, book_id, current_page)
+
         await update.message.reply_text("✅ Информация о книге успешно обновлена!")
-        
+
+        if content.get('cover_id'):
+            await context.bot.send_photo(
+                chat_id=update.message.chat_id,
+                photo=content['cover_id'],
+                caption=content['text'],
+                reply_markup=content['reply_markup'],
+                parse_mode='Markdown'
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=update.message.chat_id,
+                text=content['text'],
+                reply_markup=content['reply_markup'],
+                parse_mode='Markdown'
+            )
+
     except Exception as e:
         await update.message.reply_text(f"❌ Произошла ошибка при обновлении: {e}")
         
     finally:
         context.user_data.pop('book_to_edit', None)
         context.user_data.pop('field_to_edit', None)
-        
-        query_data = f"admin_view_book_{book_id}"
-        # Создаем "фейковый" объект CallbackQuery, чтобы вернуться к карточке
-        fake_query = type('CallbackQuery', (), {
-            'data': query_data,
-            'message': update.message,
-            'answer': (lambda: type('coroutine', (), {'__await__': (lambda: (yield))})()), # async lambda
-            'edit_message_caption': (lambda **kwargs: type('coroutine', (), {'__await__': (lambda: (yield))})()) # async lambda
-        })()
-        await show_book_details(type('Update', (), {'callback_query': fake_query})(), context)
 
     return ConversationHandler.END
 
