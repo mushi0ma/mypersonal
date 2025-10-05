@@ -21,7 +21,7 @@ ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
 # --- Импорт наших модулей ---
 import db_data
 from db_utils import get_db_connection # Импортируем функцию для получения соединения
-from tasks import create_and_send_notification
+import tasks
 
 # --- Состояния для диалогов ---
 BROADCAST_MESSAGE = range(1)
@@ -75,8 +75,8 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         with get_db_connection() as conn:
             user_db_ids = db_data.get_all_user_ids(conn)
         for user_id in user_db_ids:
-            # Вызываем новую "умную" задачу
-            create_and_send_notification.delay(user_id=user_id, text=message_text, category='broadcast')
+            # Вызываем новую задачу для уведомления пользователей
+            tasks.notify_user.delay(user_id=user_id, text=message_text, category='broadcast')
         await update.message.reply_text(f"✅ Рассылка успешно запущена для {len(user_db_ids)} пользователей.")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при запуске рассылки: {e}")

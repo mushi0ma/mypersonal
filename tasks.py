@@ -5,7 +5,7 @@ from celery.schedules import crontab
 from dotenv import load_dotenv
 import telegram
 import db_data
-from db_utils import get_db_connection # Импортируем функцию для получения соединения
+from db_utils import get_db_connection
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -17,79 +17,74 @@ celery_app = Celery(
     backend=os.getenv("CELERY_RESULT_BACKEND")
 )
 
-# --- Инициализация API бота-уведомителя ---
+# --- ИНИЦИАЛИЗАЦИЯ ДВУХ БОТОВ ---
+
+# 1. Бот-уведомитель для ПОЛЬЗОВАТЕЛЕЙ
 try:
-    notifier_bot = telegram.Bot(token=os.getenv("NOTIFICATION_BOT_TOKEN"))
-    print("✅ API бота-уведомителя для Celery успешно инициализировано.")
+    user_notifier_bot = telegram.Bot(token=os.getenv("NOTIFICATION_BOT_TOKEN"))
+    print("✅ API бота-уведомителя для ПОЛЬЗОВАТЕЛЕЙ инициализировано.")
 except Exception as e:
-    print(f"❌ Не удалось инициализировать API бота-уведомителя для Celery: {e}")
-    notifier_bot = None
+    print(f"❌ Не удалось инициализировать API бота-уведомителя для пользователей: {e}")
+    user_notifier_bot = None
 
-# --- НОВАЯ УМНАЯ ЗАДАЧА ---
+# 2. Бот-аудитор для АДМИНИСТРАТОРА
+try:
+    admin_notifier_bot = telegram.Bot(token=os.getenv("ADMIN_NOTIFICATION_BOT_TOKEN"))
+    ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
+    print("✅ API бота-аудитора для АДМИНА инициализировано.")
+except Exception as e:
+    print(f"❌ Не удалось инициализировать API бота-аудитора для админа: {e}")
+    admin_notifier_bot = None
 
-@celery_app.task
-def send_telegram_message(telegram_id: int, message: str):
-    """
-    Отправляет прямое сообщение пользователю через уведомителя.
-    Используется для отправки кодов верификации до того, как создан user_id.
-    """
-    if not notifier_bot:
-        print(f"❌ Бот-уведомитель недоступен. Невозможно отправить сообщение для {telegram_id}")
-        return
-    try:
-        notifier_bot.send_message(chat_id=telegram_id, text=message)
-        print(f"✅ Прямое сообщение успешно отправлено для {telegram_id}.")
-    except telegram.error.TelegramError as e:
-        print(f"❌ Ошибка при отправке прямого сообщения для {telegram_id}: {e}")
-    except Exception as e:
-        print(f"❌ Произошла непредвиденная ошибка в задаче send_telegram_message: {e}")
+# --- НОВЫЕ, СПЕЦИАЛИЗИРОВАННЫЕ ЗАДАЧИ ---
 
 @celery_app.task
-def create_and_send_notification(user_id: int, text: str, category: str):
-    """
-    Главная задача: сохраняет уведомление в БД и отправляет его пользователю.
-    """
-    if not notifier_bot:
-        print(f"❌ Бот-уведомитель недоступен. Невозможно обработать уведомление для пользователя {user_id}")
+def notify_user(user_id: int, text: str, category: str = 'system'):
+    """Сохраняет и отправляет уведомление КОНКРЕТНОМУ ПОЛЬЗОВАТЕЛЮ через Bot-Notifier."""
+    if not user_notifier_bot:
+        print(f"❌ Bot-Notifier недоступен. Уведомление для user_id={user_id} не отправлено.")
         return
 
     try:
         with get_db_connection() as conn:
-            # 1. Сохраняем уведомление в базу данных
+            # Сначала сохраняем уведомление в БД, чтобы оно не потерялось
             db_data.create_notification(conn, user_id=user_id, text=text, category=category)
-
-            # 2. Получаем telegram_id для отправки
+            # Затем получаем telegram_id для отправки
             telegram_id = db_data.get_telegram_id_by_user_id(conn, user_id)
         
-        # 3. Отправляем сообщение
-        notifier_bot.send_message(chat_id=telegram_id, text=text, parse_mode='Markdown')
-        print(f"✅ Уведомление для пользователя {user_id} сохранено и отправлено на {telegram_id}.")
-
-    except db_data.NotFoundError as e:
-        print(f"❌ Ошибка при обработке уведомления для пользователя {user_id}: {e}")
-    except telegram.error.TelegramError as e:
-        # Мы не можем получить telegram_id здесь, если он не был получен ранее
-        print(f"❌ Ошибка при отправке уведомления для пользователя {user_id}: {e}")
+        user_notifier_bot.send_message(chat_id=telegram_id, text=text, parse_mode='Markdown')
+        print(f"✅ Уведомление '{category}' для user_id={user_id} отправлено на telegram_id={telegram_id}.")
     except Exception as e:
-        print(f"❌ Произошла непредвиденная ошибка в задаче create_and_send_notification: {e}")
+        print(f"❌ Ошибка в задаче notify_user для user_id={user_id}: {e}")
 
+@celery_app.task
+def notify_admin(text: str, category: str = 'audit'):
+    """Отправляет системное уведомление АДМИНИСТРАТОРУ через Bot-Auditor."""
+    if not admin_notifier_bot:
+        print(f"❌ Bot-Auditor недоступен. Системное уведомление не отправлено.")
+        return
+    try:
+        # Для админа мы не сохраняем уведомления в БД, а шлём их напрямую
+        admin_notifier_bot.send_message(chat_id=ADMIN_TELEGRAM_ID, text=text, parse_mode='Markdown')
+        print(f"✅ Аудит-уведомление '{category}' для админа отправлено.")
+    except Exception as e:
+        print(f"❌ Ошибка в задаче notify_admin: {e}")
 
-# ... (остальные задачи, такие как check_due_dates_and_notify, остаются без изменений) ...
+# --- ПЕРИОДИЧЕСКАЯ ЗАДАЧА (пока без изменений) ---
 @celery_app.task
 def check_due_dates_and_notify():
     """Проверяет сроки сдачи книг и уведомляет должников."""
     print("Выполняется периодическая задача: проверка сроков сдачи книг...")
-    # В будущем здесь будет логика, которая будет вызывать create_and_send_notification
+    # В будущем здесь будет логика, которая будет вызывать notify_user.delay(...)
     # with get_db_connection() as conn:
-    #     users = db_data.get_users_with_overdue_books(conn)
-    # for user in users:
-    #     text = "Напоминание о сроке сдачи книги!"
-    #     create_and_send_notification.delay(user['id'], text, 'due_date')
+    #     overdue_users = db_data.get_users_with_overdue_books(conn)
+    # for user in overdue_users:
+    #     text = f"⏰ Напоминание: срок возврата книги '...' истекает завтра!"
+    #     notify_user.delay(user_id=user['id'], text=text, category='due_date')
 
-# --- Расписание для периодических задач (Celery Beat) ---
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
         'task': 'tasks.check_due_dates_and_notify',
-        'schedule': crontab(hour=10, minute=0),
+        'schedule': crontab(hour=10, minute=0), # Каждый день в 10:00
     },
 }

@@ -65,6 +65,19 @@ services:
       db:
         condition: service_healthy
 
+# --- НОВЫЙ СЕРВИС ДЛЯ БОТА-АУДИТОРА ---
+  audit_bot:
+    build: .
+    restart: always
+    command: python audit_bot.py # Новый файл, который мы создадим
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
   # Фоновый обработчик задач Celery
   celery_worker:
     build: .

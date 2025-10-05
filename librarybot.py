@@ -20,7 +20,7 @@ from telegram.ext import (
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import db_data
 from db_utils import get_db_connection, hash_password
-from tasks import create_and_send_notification, send_telegram_message
+import tasks
 
 # --- ИМПОРТ СЕРВИСОВ ---
 from sendgrid import SendGridAPIClient
@@ -78,19 +78,8 @@ def normalize_phone_number(contact: str) -> str:
 def get_user_borrow_limit(status):
     return {'студент': 3, 'учитель': 5}.get(status.lower(), 0)
 
-async def send_local_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int) -> bool:
-    """Отправляет код верификации через Celery (старый метод, т.к. user_id еще нет)."""
-    try:
-        message_body = f"Ваш код для библиотеки: {code}"
-        send_telegram_message.delay(telegram_id, message_body)
-        context.user_data['verification_method'] = 'telegram_notifier'
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при постановке задачи на отправку кода в Telegram: {e}")
-        return False
-
 async def send_verification_message(contact_info: str, code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int):
-    # Email
+    # Попытка отправить на Email
     if re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", contact_info):
         try:
             message_body = f"Ваш код для библиотеки: {code}"
@@ -101,9 +90,11 @@ async def send_verification_message(contact_info: str, code: str, context: Conte
             return True
         except Exception as e:
             logger.error(f"Ошибка при отправке email: {e}")
-            return False
-    # Fallback to Telegram
-    return await send_local_code_telegram(code, context, telegram_id)
+            # Если email не удался, все равно отправляем в Telegram
+            
+    # Если контакт - не email, или отправка email не удалась,
+    # отправляем сообщение от имени текущего бота.
+    return await send_self_code_telegram(code, context, telegram_id)
 
 def get_back_button(current_state_const: int) -> list:
     """Генерирует кнопку 'Назад', используя имя константы состояния."""
@@ -127,6 +118,17 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await query.edit_message_text("❌ Действие отменено. Возвращаемся в меню.")
     
     return ConversationHandler.END
+
+async def send_self_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
+    """Отправляет код верификации от имени текущего бота."""
+    try:
+        message_body = f"Ваш код для библиотеки: {code}"
+        await context.bot.send_message(chat_id=chat_id, text=message_body)
+        context.user_data['verification_method'] = 'self_telegram'
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при отправке кода самому себе: {e}")
+        return False
 
 # --------------------------
 # --- ОСНОВНЫЕ ОБРАБОТЧИКИ ---
@@ -318,6 +320,10 @@ async def check_notification_subscription(update: Update, context: ContextTypes.
         
         if user.get('telegram_id'):
             db_data.log_activity(conn, user_id=user_id, action="registration_finish")
+
+            admin_text = f"✅ Новый пользователь @{user.get('telegram_username', user.get('username'))} (ID: {user_id}) успешно завершил регистрацию."
+            tasks.notify_admin.delay(text=admin_text, category='new_user')
+
             await query.edit_message_text("🎉 Регистрация полностью завершена! Теперь вы можете войти.")
             context.user_data.clear()
             return await start(update, context)
@@ -666,7 +672,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if reservations:
                     user_to_notify_id = reservations[0]
                     notification_text = f"🎉 Книга «{book_name}», которую вы резервировали, снова в наличии."
-                    create_and_send_notification.delay(user_id=user_to_notify_id, text=notification_text, category='reservation')
+                    tasks.notify_user.delay(user_id=user_to_notify_id, text=notification_text, category='reservation')
                     db_data.update_reservation_status(conn, user_to_notify_id, book_id, notified=True)
                 return USER_RATE_PROMPT_AFTER_RETURN
             else:
@@ -812,6 +818,9 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
             # Теперь логируем действие С ДЕТАЛЯМИ (username)
             db_data.log_activity(conn, user_id=user_id, action="self_delete_account", details=f"Username: {username}")
             
+            admin_text = f"🗑️ Пользователь @{username} (ID: {user_id}) самостоятельно удалил свой аккаунт."
+            tasks.notify_admin.delay(text=admin_text, category='user_self_deleted')
+
             await query.edit_message_text("✅ Ваш аккаунт был удален. Прощайте!")
             context.user_data.clear()
             return ConversationHandler.END
