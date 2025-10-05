@@ -576,26 +576,39 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
     await query.answer()
     book_id = int(query.data.split('_')[2])
     user_id = context.user_data['current_user']['id']
+    
     try:
         with get_db_connection() as conn:
+            # Получаем детали книги для сообщений
             selected_book = db_data.get_book_by_id(conn, book_id)
+            
             if selected_book['available_quantity'] > 0:
                 borrowed_books = db_data.get_borrowed_books(conn, user_id)
                 borrow_limit = get_user_borrow_limit(context.user_data['current_user']['status'])
+
                 if len(borrowed_books) >= borrow_limit:
                     await query.edit_message_text(f"⚠️ Вы достигли лимита ({borrow_limit}) на заимствование.")
+                    # Возвращаемся в меню через 3 секунды, чтобы пользователь успел прочитать
+                    # (Это необязательное, но приятное UX улучшение)
+                    # await asyncio.sleep(3) 
                     return await user_menu(update, context)
+
+                # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
+
+                # 1. Вызываем функцию, которая возвращает due_date
                 due_date = db_data.borrow_book(conn, user_id, selected_book['id'])
                 db_data.log_activity(conn, user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}")
 
-                # Отправляем уведомление вместо прямого ответа
+                # 2. Формируем и отправляем асинхронное уведомление
                 due_date_str = due_date.strftime('%d.%m.%Y')
                 notification_text = f"✅ Вы успешно взяли книгу «{selected_book['name']}».\n\nПожалуйста, верните ее до **{due_date_str}**."
                 tasks.notify_user.delay(user_id=user_id, text=notification_text, category='confirmation')
 
+                # 3. Даем пользователю быстрый ответ и возвращаем в меню
                 await query.edit_message_text("👍 Отлично! Подтверждение отправлено вам в бот-уведомитель.")
                 return await user_menu(update, context)
-            else:
+            
+            else: # Логика резервации остается без изменений
                 context.user_data['book_to_reserve'] = selected_book
                 keyboard = [
                     [InlineKeyboardButton("✅ Да, уведомить", callback_data="reserve_yes")],
@@ -604,13 +617,13 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.edit_message_text(f"⏳ Книга «{selected_book['name']}» временно отсутствует. Хотите зарезервировать и получить уведомление, когда она освободится?", reply_markup=reply_markup)
                 return USER_RESERVE_BOOK_CONFIRM
+
     except (db_data.NotFoundError, IndexError):
         await query.edit_message_text("❌ Ошибка: книга не найдена.")
         return await user_menu(update, context)
     except Exception as e:
         error_text = f"❌ Непредвиденная ошибка. Мы уже работаем над этим."
         logger.error(f"Критическая ошибка в process_borrow_selection: {e}", exc_info=True)
-        # --- УВЕДОМЛЕНИЕ АДМИНУ (уже было, но можно улучшить) ---
         tasks.notify_admin.delay(
             text=f"❗️ **Критическая ошибка в `librarybot`**\n\n**Функция:** `process_borrow_selection`\n**Ошибка:** `{e}`",
             category='error'
@@ -688,8 +701,19 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reservations = db_data.get_reservations_for_book(conn, book_id)
                 if reservations:
                     user_to_notify_id = reservations[0]
-                    notification_text = f"🎉 Книга «{book_name}», которую вы резервировали, снова в наличии."
-                    tasks.notify_user.delay(user_id=user_to_notify_id, text=notification_text, category='reservation')
+
+                    notification_text = f"🎉 Отличные новости! Книга «{book_name}», которую вы резервировали, снова в наличии."
+                    callback_data = f"borrow_book_{book_id}"
+
+                    # Создаем "умное" уведомление с кнопкой
+                    tasks.notify_user.delay(
+                        user_id=user_to_notify_id, 
+                        text=notification_text, 
+                        category='reservation',
+                        button_text="📥 Взять книгу сейчас",
+                        button_callback=callback_data
+                    )
+
                     db_data.update_reservation_status(conn, user_to_notify_id, book_id, notified=True)
                 return USER_RATE_PROMPT_AFTER_RETURN
             else:
@@ -1236,7 +1260,8 @@ def main() -> None:
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
             CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
             CallbackQueryHandler(start_search, pattern="^search_book$"),
-            edit_profile_handler, 
+            edit_profile_handler,
+            CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
         ],
         USER_BORROW_BOOK_SELECT: [
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),

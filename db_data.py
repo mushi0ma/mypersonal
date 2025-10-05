@@ -688,3 +688,25 @@ def get_users_with_overdue_books(conn):
         )
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
+    
+def get_users_with_books_due_soon(conn, days_ahead: int = 2):
+    """
+    Возвращает список пользователей, у которых срок возврата книги
+    истекает ровно через 'days_ahead' дней.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 
+                u.id as user_id,
+                b.name as book_name,
+                bb.due_date
+            FROM borrowed_books bb
+            JOIN users u ON bb.user_id = u.id
+            JOIN books b ON bb.book_id = b.id
+            WHERE bb.return_date IS NULL AND bb.due_date = CURRENT_DATE + INTERVAL '%s day'
+            """,
+            (days_ahead,)
+        )
+        columns = [desc[0] for desc in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]
