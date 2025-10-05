@@ -1141,7 +1141,6 @@ def main() -> None:
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
         SHOWING_GENRE_BOOKS: [
-            CallbackQueryHandler(show_books_in_genre, pattern=r"^genre_"),
             CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
