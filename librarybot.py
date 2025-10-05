@@ -716,43 +716,53 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not borrowed_info:
         await query.edit_message_text("❌ Ошибка выбора. Попробуйте снова.")
         return await user_menu(update, context)
+
     book_id = borrowed_info['book_id']
     book_name = borrowed_info['book_name']
     user_id = context.user_data['current_user']['id']
+
     try:
         with get_db_connection() as conn:
             result = db_data.return_book(conn, borrowed_info['borrow_id'], book_id)
+            
             if result == "Успешно":
                 db_data.log_activity(conn, user_id=user_id, action="return_book", details=f"Book ID: {book_id}")
                 context.user_data.pop('borrowed_map', None)
-                context.user_data['just_returned_book'] = {'id': book_id, 'name': book_name}
-                keyboard = [
-                    [InlineKeyboardButton("⭐ Оценить книгу", callback_data="rate_after_return")],
-                    [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(f"✅ Книга «{book_name}» возвращена. Не хотите ли поставить ей оценку?", reply_markup=reply_markup)
+                
+                # --- НОВАЯ ЛОГИКА УВЕДОМЛЕНИЙ ---
+                
+                # 1. Отправляем пользователю, вернувшему книгу, уведомление с кнопкой "Оценить"
+                notification_text = f"✅ Книга «{book_name}» успешно возвращена. Не хотите ли поставить ей оценку?"
+                tasks.notify_user.delay(
+                    user_id=user_id,
+                    text=notification_text,
+                    category='confirmation',
+                    button_text="⭐ Поставить оценку",
+                    button_callback=f"rate_book_{book_id}"
+                )
+
+                # 2. Проверяем резервации и уведомляем следующего в очереди
                 reservations = db_data.get_reservations_for_book(conn, book_id)
                 if reservations:
                     user_to_notify_id = reservations[0]
-
-                    notification_text = f"🎉 Отличные новости! Книга «{book_name}», которую вы резервировали, снова в наличии."
-                    callback_data = f"borrow_book_{book_id}"
-
-                    # Создаем "умное" уведомление с кнопкой
+                    reservation_text = f"🎉 Отличные новости! Книга «{book_name}», которую вы резервировали, снова в наличии."
                     tasks.notify_user.delay(
                         user_id=user_to_notify_id, 
-                        text=notification_text, 
+                        text=reservation_text, 
                         category='reservation',
                         button_text="📥 Взять книгу сейчас",
-                        button_callback=callback_data
+                        button_callback=f"borrow_book_{book_id}"
                     )
-
                     db_data.update_reservation_status(conn, user_to_notify_id, book_id, notified=True)
-                return USER_RATE_PROMPT_AFTER_RETURN
-            else:
+
+                # 3. Даем быстрый ответ в основном боте и возвращаемся в меню
+                await query.edit_message_text(f"✅ Книга «{book_name}» возвращена. Подтверждение отправлено в бот-уведомитель.")
+                return await user_menu(update, context)
+
+            else: # Если db_data.return_book вернул строку с ошибкой
                 await query.edit_message_text(f"❌ Не удалось вернуть: {result}")
                 return await user_menu(update, context)
+                
     except Exception as e:
         logger.error(f"Ошибка при возврате книги: {e}", exc_info=True)
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при возврате книги**\n\n**Функция:** `process_return_book`\n**Ошибка:** `{e}`")
@@ -823,17 +833,43 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return USER_RATE_BOOK_RATING
     user_id = context.user_data['current_user']['id']
     book_info = context.user_data['book_to_rate']
+
     try:
         with get_db_connection() as conn:
             db_data.add_rating(conn, user_id, book_info['book_id'], rating)
             db_data.log_activity(conn, user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
-        message_text = f"👍 Спасибо! Ваша оценка «{rating}» для книги «{book_info['book_name']}» сохранена."
+
+        notification_text = f"👍 Спасибо! Ваша оценка «{rating}» для книги «{book_info['book_name']}» сохранена."
+        tasks.notify_user.delay(user_id=user_id, text=notification_text, category='confirmation')
+
+        await query.edit_message_text("✅ Спасибо за вашу оценку!")
+
     except Exception as e:
         message_text = f"❌ Не удалось сохранить: {e}"
+        await query.edit_message_text(message_text)
+        tasks.notify_admin.delay(text=f"❗️ Ошибка при сохранении оценки для user_id {user_id}: {e}")
+
     context.user_data.pop('book_to_rate', None)
     context.user_data.pop('rating_map', None)
-    await query.edit_message_text(message_text)
+
     return await user_menu(update, context)
+
+async def start_rating_from_notification(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начинает процесс оценки из уведомления."""
+    query = update.callback_query
+    await query.answer()
+    
+    book_id = int(query.data.split('_')[2])
+    
+    # Получаем информацию о книге для заголовка
+    with get_db_connection() as conn:
+        book_info_raw = db_data.get_book_by_id(conn, book_id)
+        
+    book_info = {'id': book_id, 'name': book_info_raw['name']}
+    context.user_data['book_to_rate'] = book_info
+
+    # Переиспользуем существующую функцию для показа кнопок с оценками
+    return await select_rating(update, context, from_return=True)
 
 async def show_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -1351,6 +1387,7 @@ def main() -> None:
             CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
             CallbackQueryHandler(process_book_extension, pattern=r"^extend_borrow_"),
+            CallbackQueryHandler(start_rating_from_notification, pattern=r"^rate_book_"),
         ],
         USER_BORROW_BOOK_SELECT: [
             CallbackQueryHandler(process_borrow_selection, pattern=r"^borrow_book_"),
