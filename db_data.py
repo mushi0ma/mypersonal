@@ -186,15 +186,29 @@ def get_book_by_id(conn, book_id: int):
         return dict(zip(columns, row))
 
 def borrow_book(conn, user_id: int, book_id: int):
-    """Обрабатывает взятие книги."""
+    """Обрабатывает взятие книги и возвращает дату, до которой нужно вернуть."""
     with conn.cursor() as cur:
         try:
+            # Сначала уменьшаем количество доступных книг
             cur.execute("UPDATE books SET available_quantity = available_quantity - 1 WHERE id = %s AND available_quantity > 0", (book_id,))
             if cur.rowcount == 0:
-                return "Книга закончилась."
-            cur.execute("INSERT INTO borrowed_books (user_id, book_id, due_date) VALUES (%s, %s, CURRENT_DATE + INTERVAL '14 day')", (user_id, book_id))
+                # Если rowcount == 0, значит, available_quantity была 0, и UPDATE не сработал
+                return None # Возвращаем None, чтобы бот понял, что книга закончилась
+
+            # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+            # Добавляем RETURNING due_date, чтобы получить рассчитанную дату
+            cur.execute(
+                """
+                INSERT INTO borrowed_books (user_id, book_id, due_date) 
+                VALUES (%s, %s, CURRENT_DATE + INTERVAL '14 day')
+                RETURNING due_date
+                """, 
+                (user_id, book_id)
+            )
+            due_date = cur.fetchone()[0]
             conn.commit()
-            return "Книга успешно взята."
+            return due_date # Теперь due_date содержит корректную дату
+
         except psycopg2.Error as e:
             conn.rollback()
             raise DatabaseError(f"Ошибка базы данных при взятии книги: {e}")
@@ -653,3 +667,24 @@ def link_telegram_id_by_code(conn, code: str, telegram_id: int, telegram_usernam
         )
         if cur.fetchone() is None:
             raise NotFoundError("Пользователь с таким кодом регистрации не найден.")
+        
+def get_users_with_overdue_books(conn):
+    """
+    Возвращает список пользователей, у которых есть книги с истекшим сроком возврата.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 
+                u.id as user_id, 
+                u.username,
+                b.name as book_name,
+                bb.due_date
+            FROM borrowed_books bb
+            JOIN users u ON bb.user_id = u.id
+            JOIN books b ON bb.book_id = b.id
+            WHERE bb.return_date IS NULL AND bb.due_date < CURRENT_DATE
+            """
+        )
+        columns = [desc[0] for desc in cur.description]
+        return [dict(zip(columns, row)) for row in cur.fetchall()]

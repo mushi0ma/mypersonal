@@ -73,18 +73,32 @@ def notify_admin(text: str, category: str = 'audit'):
 # --- ПЕРИОДИЧЕСКАЯ ЗАДАЧА (пока без изменений) ---
 @celery_app.task
 def check_due_dates_and_notify():
-    """Проверяет сроки сдачи книг и уведомляет должников."""
+    """Проверяет сроки сдачи книг и уведомляет должников и администратора."""
     print("Выполняется периодическая задача: проверка сроков сдачи книг...")
-    # В будущем здесь будет логика, которая будет вызывать notify_user.delay(...)
-    # with get_db_connection() as conn:
-    #     overdue_users = db_data.get_users_with_overdue_books(conn)
-    # for user in overdue_users:
-    #     text = f"⏰ Напоминание: срок возврата книги '...' истекает завтра!"
-    #     notify_user.delay(user_id=user['id'], text=text, category='due_date')
+    try:
+        with get_db_connection() as conn:
+            overdue_entries = db_data.get_users_with_overdue_books(conn)
 
-celery_app.conf.beat_schedule = {
-    'check-due-dates-every-day': {
-        'task': 'tasks.check_due_dates_and_notify',
-        'schedule': crontab(hour=10, minute=0), # Каждый день в 10:00
-    },
-}
+        if not overdue_entries:
+            print("Просроченных книг не найдено.")
+            return
+
+        print(f"Найдено просроченных книг: {len(overdue_entries)}")
+        for entry in overdue_entries:
+            user_id = entry['user_id']
+            username = entry['username']
+            book_name = entry['book_name']
+            due_date_str = entry['due_date'].strftime('%d.%m.%Y')
+
+            # Уведомление для пользователя
+            user_text = f"⏰ **Напоминание:** Срок возврата книги «{book_name}» истек {due_date_str}! Пожалуйста, верните ее в библиотеку."
+            notify_user.delay(user_id=user_id, text=user_text, category='due_date')
+
+            # Уведомление для администратора
+            admin_text = f"❗️Пользователь @{username} просрочил книгу «{book_name}» (срок: {due_date_str})."
+            notify_admin.delay(text=admin_text, category='overdue')
+
+    except Exception as e:
+        print(f"❌ Ошибка в периодической задаче check_due_dates: {e}")
+        # Отправляем уведомление об ошибке в самой задаче
+        notify_admin.delay(text=f"❗ Критическая ошибка в периодической задаче `check_due_dates_and_notify`: {e}", category='error')

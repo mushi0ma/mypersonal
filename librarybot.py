@@ -581,9 +581,15 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
                 if len(borrowed_books) >= borrow_limit:
                     await query.edit_message_text(f"⚠️ Вы достигли лимита ({borrow_limit}) на заимствование.")
                     return await user_menu(update, context)
-                db_data.borrow_book(conn, user_id, selected_book['id'])
+                due_date = db_data.borrow_book(conn, user_id, selected_book['id'])
                 db_data.log_activity(conn, user_id=user_id, action="borrow_book", details=f"Book ID: {selected_book['id']}")
-                await query.edit_message_text(f"✅ Книга «{selected_book['name']}» успешно взята.")
+
+                # Отправляем уведомление вместо прямого ответа
+                due_date_str = due_date.strftime('%d.%m.%Y')
+                notification_text = f"✅ Вы успешно взяли книгу «{selected_book['name']}».\n\nПожалуйста, верните ее до **{due_date_str}**."
+                tasks.notify_user.delay(user_id=user_id, text=notification_text, category='confirmation')
+
+                await query.edit_message_text("👍 Отлично! Подтверждение отправлено вам в бот-уведомитель.")
                 return await user_menu(update, context)
             else:
                 context.user_data['book_to_reserve'] = selected_book
@@ -598,7 +604,14 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text("❌ Ошибка: книга не найдена.")
         return await user_menu(update, context)
     except Exception as e:
-        await query.edit_message_text(f"❌ Непредвиденная ошибка: {e}")
+        error_text = f"❌ Непредвиденная ошибка: {e}"
+        logger.error(f"Критическая ошибка в process_borrow_selection: {e}", exc_info=True)
+        # Отправляем аудит-уведомление
+        tasks.notify_admin.delay(
+            text=f"❗ **Критическая ошибка в `librarybot`**\n\n**Функция:** `process_borrow_selection`\n**Ошибка:** `{e}`",
+            category='error'
+        )
+        await query.edit_message_text(error_text)
         return await user_menu(update, context)
 
 async def process_reservation_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
