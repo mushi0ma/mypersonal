@@ -55,36 +55,36 @@ def calculate_age(dob_string: str) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Приветственное сообщение для админа."""
     await update.message.reply_text(
-        "Добро пожаловать в панель администратора!\n"
-        "Доступные команды:\n"
-        "/broadcast - Отправить сообщение всем пользователям\n"
-        "/stats - Показать статистику пользователей\n"
-        "/books - Управление каталогом книг"
+        "👋 **Добро пожаловать в панель администратора!**\n\n"
+        "Здесь вы можете управлять ботом. Доступные команды:\n\n"
+        "📢 /broadcast - Отправить сообщение всем пользователям\n"
+        "📊 /stats - Показать статистику пользователей\n"
+        "📚 /books - Управление каталогом книг"
     )
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог массовой рассылки."""
-    await update.message.reply_text("Введите сообщение для рассылки. Для отмены введите /cancel.")
+    await update.message.reply_text("📢 **Рассылка**\n\nВведите сообщение, которое получат все пользователи. Для отмены введите /cancel.")
     return BROADCAST_MESSAGE
 
 async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обрабатывает и ставит в очередь задачи на рассылку."""
     message_text = update.message.text
-    await update.message.reply_text("Начинаю рассылку...")
+    await update.message.reply_text("⏳ Начинаю рассылку...")
     try:
         with get_db_connection() as conn:
             user_db_ids = db_data.get_all_user_ids(conn)
         for user_id in user_db_ids:
             # Вызываем новую "умную" задачу
             create_and_send_notification.delay(user_id=user_id, text=message_text, category='broadcast')
-        await update.message.reply_text(f"Рассылка запущена для {len(user_db_ids)} пользователей.")
+        await update.message.reply_text(f"✅ Рассылка успешно запущена для {len(user_db_ids)} пользователей.")
     except Exception as e:
-        await update.message.reply_text(f"Ошибка при запуске рассылки: {e}")
+        await update.message.reply_text(f"❌ Ошибка при запуске рассылки: {e}")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отменяет диалог рассылки."""
-    await update.message.reply_text("Действие отменено.")
+    await update.message.reply_text("👌 Действие отменено.")
     return ConversationHandler.END
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -101,9 +101,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with get_db_connection() as conn:
             users, total_users = db_data.get_all_users(conn, limit=users_per_page, offset=offset)
         if not users and page == 0:
-            await update.message.reply_text("В базе данных пока нет пользователей.")
+            await update.message.reply_text("👥 В базе данных пока нет пользователей.")
             return
-        message_text = f"👤 **Всего пользователей: {total_users}**\n\nСтраница {page + 1}:\nНажмите на пользователя для деталей."
+        message_text = f"📊 **Статистика пользователей** (Всего: {total_users})\n\nСтраница {page + 1}:\nНажмите на пользователя для деталей."
         keyboard = []
         for user in users:
             button_text = f"👤 {user['username']} ({user['full_name']})"
@@ -122,7 +122,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
-        await update.message.reply_text(f"Ошибка при получении статистики: {e}")
+        await update.message.reply_text(f"❌ Ошибка при получении статистики: {e}")
 
 async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку пользователя."""
@@ -135,31 +135,31 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user = db_data.get_user_by_id(conn, user_id)
             borrow_history = db_data.get_user_borrow_history(conn, user_id)
             rating_history = db_data.get_user_ratings(conn, user_id)
-        reg_date = user['registration_date'].strftime("%Y-%m-%d %H:%M")
+        reg_date = user['registration_date'].strftime("%d.%m.%Y %H:%M")
         age = calculate_age(user['dob'])
         message_parts = [
-            f"**Карточка: `{user['username']}`**",
+            f"**👤 Карточка пользователя: `{user['username']}`**",
             f"**ФИО:** {user['full_name']}",
             f"**Возраст:** {age}",
             f"**Статус:** {user['status']}",
-            f"**Контакт:** {user['contact_info']}",
+            f"**Контакт:** `{user['contact_info']}`",
             f"**Регистрация:** {reg_date}\n",
-            "**История взятых книг:**"
+            "**📚 История взятых книг:**"
         ]
         if borrow_history:
             for item in borrow_history:
-                return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "не возвращена"
+                return_date_str = item['return_date'].strftime('%d.%m.%Y') if item['return_date'] else "На руках"
                 borrow_date_str = item['borrow_date'].strftime('%d.%m.%Y')
                 message_parts.append(f" - `{item['book_name']}` (взята: {borrow_date_str}, возвращена: {return_date_str})")
         else:
-            message_parts.append("Нет записей.")
-        message_parts.append("\n**История оценок:**")
+            message_parts.append("  _Нет записей._")
+        message_parts.append("\n**⭐ История оценок:**")
         if rating_history:
             for item in rating_history:
                 stars = "⭐" * item['rating']
                 message_parts.append(f" - `{item['book_name']}`: {stars}")
         else:
-            message_parts.append("Нет оценок.")
+            message_parts.append("  _Нет оценок._")
         message_text = "\n".join(message_parts)
         keyboard = [
             [InlineKeyboardButton("📜 История действий", callback_data=f"admin_activity_{user_id}_0")],
@@ -169,7 +169,7 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
-        await query.edit_message_text(f"Произошла ошибка: {e}")
+        await query.edit_message_text(f"❌ Произошла ошибка: {e}")
 
 async def ask_for_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Спрашивает у админа подтверждение на удаление."""
@@ -182,9 +182,10 @@ async def ask_for_delete_confirmation(update: Update, context: ContextTypes.DEFA
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "Вы уверены, что хотите удалить этого пользователя?\n\n"
-        "Это действие вернет все его книги и обезличит аккаунт. История действий сохранится.",
-        reply_markup=reply_markup
+        "**⚠️ Вы уверены, что хотите удалить этого пользователя?**\n\n"
+        "Это действие вернет все его книги и обезличит аккаунт. История действий сохранится. Отменить это будет невозможно.",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
 async def process_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,9 +197,9 @@ async def process_delete_confirmation(update: Update, context: ContextTypes.DEFA
     try:
         with get_db_connection() as conn:
             result = db_data.delete_user_by_admin(conn, user_id)
-        await query.edit_message_text(f"Пользователь успешно удален.")
+        await query.edit_message_text(f"✅ Пользователь успешно удален (анонимизирован).")
     except Exception as e:
-        await query.edit_message_text(f"Ошибка при удалении: {e}")
+        await query.edit_message_text(f"❌ Ошибка при удалении: {e}")
     query.data = f"stats_page_{current_page}"
     await stats(update, context)
 
@@ -214,21 +215,19 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     logs_per_page = 10
 
     try:
-        # --- НАЧАЛО ИЗМЕНЕНИЙ ---
         with get_db_connection() as conn:
             logs, total_logs = db_data.get_user_activity(conn, user_id, limit=logs_per_page, offset=page * logs_per_page)
             user = db_data.get_user_by_id(conn, user_id)
-        # --- КОНЕЦ ИЗМЕНЕНИЙ ---
             
-        message_parts = [f"**📜 Журнал действий для `{user['username']}`**\n(Всего записей: {total_logs}, страница {page + 1})\n"]
+        message_parts = [f"**📜 Журнал действий для `{user['username']}`** (Всего: {total_logs}, Стр. {page + 1})\n"]
 
         if logs:
             for log in logs:
                 timestamp_str = log['timestamp'].strftime('%d.%m.%Y %H:%M')
                 details = f"({log['details']})" if log['details'] else ""
-                message_parts.append(f"`{timestamp_str}` - **{log['action']}** {details}")
+                message_parts.append(f"`{timestamp_str}`: **{log['action']}** {details}")
         else:
-            message_parts.append("Нет записей об активности.")
+            message_parts.append("  _Нет записей об активности._")
 
         # Кнопки навигации
         nav_buttons = []
@@ -247,7 +246,7 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
 
     except Exception as e:
-        await query.edit_message_text(f"Произошла ошибка при получении логов: {e}")
+        await query.edit_message_text(f"❌ Произошла ошибка при получении логов: {e}")
 
 async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает постраничный список всех книг."""
@@ -266,9 +265,9 @@ async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with get_db_connection() as conn:
             books, total_books = db_data.get_all_books_paginated(conn, limit=books_per_page, offset=offset)
 
-        message_text = f"📚 **Всего книг в каталоге: {total_books}**\n\nСтраница {page + 1}:"
+        message_text = f"📚 **Управление каталогом** (Всего: {total_books})\n\nСтраница {page + 1}:"
         keyboard = [
-            [InlineKeyboardButton("➕ Добавить книгу", callback_data="admin_add_book_start")]
+            [InlineKeyboardButton("➕ Добавить новую книгу", callback_data="admin_add_book_start")]
         ]
         for book in books:
             status_icon = "🔴" if book['is_borrowed'] else "🟢"
@@ -293,7 +292,7 @@ async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     except Exception as e:
-        error_message = f"Ошибка при получении списка книг: {e}"
+        error_message = f"❌ Ошибка при получении списка книг: {e}"
         if query:
             await query.edit_message_text(error_message)
         else:
@@ -313,11 +312,11 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
             book = db_data.get_book_details(conn, book_id)
 
         if not book:
-            await query.edit_message_text("Книга не найдена.")
+            await query.edit_message_text("❌ Книга не найдена.")
             return
 
         message_parts = [
-            f"**📖 Карточка книги: \"{book['name']}\"**",
+            f"**📖 Карточка книги: «{book['name']}»**",
             f"**Автор:** {book['author']}",
             f"**Жанр:** {book['genre']}",
             f"**Описание:** {book['description']}\n"
@@ -357,7 +356,7 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
 
     except Exception as e:
-        await query.edit_message_text(f"Произошла ошибка при получении деталей книги: {e}")
+        await query.edit_message_text(f"❌ Произошла ошибка при получении деталей книги: {e}")
 
 async def start_book_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог редактирования книги, показывая поля для выбора."""
@@ -371,10 +370,10 @@ async def start_book_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         [InlineKeyboardButton("Автор", callback_data=f"edit_field_author")],
         [InlineKeyboardButton("Жанр", callback_data=f"edit_field_genre")],
         [InlineKeyboardButton("Описание", callback_data=f"edit_field_description")],
-        [InlineKeyboardButton("⬅️ Назад к карточке", callback_data=f"admin_view_book_{book_id}_cancel")],
+        [InlineKeyboardButton("⬅️ Отмена", callback_data=f"admin_view_book_{book_id}_cancel")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_caption(caption="Какое поле вы хотите отредактировать?", reply_markup=reply_markup)
+    await query.edit_message_caption(caption="✏️ Какое поле вы хотите отредактировать?", reply_markup=reply_markup)
     
     return SELECTING_BOOK_FIELD
 
@@ -398,7 +397,7 @@ async def prompt_for_update(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_caption(
-        caption=f"Пришлите новое **{field_map[field_to_edit]}** для книги.\n\nДля отмены нажмите кнопку ниже.",
+        caption=f"Пришлите новое **{field_map[field_to_edit]}** для книги.",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -421,14 +420,18 @@ async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ Произошла ошибка при обновлении: {e}")
         
     finally:
-        # Очищаем временные данные
         context.user_data.pop('book_to_edit', None)
         context.user_data.pop('field_to_edit', None)
         
-        # "Фальшивый" вызов для возврата к карточке книги
         query_data = f"admin_view_book_{book_id}"
-        update.callback_query = type('CallbackQuery', (), {'data': query_data, 'message': update.message, 'answer': lambda: None})()
-        await show_book_details(update, context)
+        # Создаем "фейковый" объект CallbackQuery, чтобы вернуться к карточке
+        fake_query = type('CallbackQuery', (), {
+            'data': query_data,
+            'message': update.message,
+            'answer': (lambda: type('coroutine', (), {'__await__': (lambda: (yield))})()), # async lambda
+            'edit_message_caption': (lambda **kwargs: type('coroutine', (), {'__await__': (lambda: (yield))})()) # async lambda
+        })()
+        await show_book_details(type('Update', (), {'callback_query': fake_query})(), context)
 
     return ConversationHandler.END
 
@@ -441,15 +444,15 @@ async def ask_for_book_delete_confirmation(update: Update, context: ContextTypes
     keyboard = [
         [
             InlineKeyboardButton("✅ Да, удалить", callback_data=f"admin_confirm_book_delete_{book_id}"),
-            InlineKeyboardButton("❌ Нет", callback_data=f"admin_view_book_{book_id}")
+            InlineKeyboardButton("❌ Нет, отмена", callback_data=f"admin_view_book_{book_id}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Поскольку мы могли прийти с сообщения с фото, используем edit_caption
     await query.edit_message_caption(
-        caption="Вы уверены, что хотите удалить эту книгу из каталога?\n\nЭто действие необратимо.",
-        reply_markup=reply_markup
+        caption="**⚠️ Вы уверены, что хотите удалить эту книгу?**\n\nЭто действие необратимо и удалит всю связанную с ней историю.",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
 
@@ -463,7 +466,7 @@ async def process_book_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         with get_db_connection() as conn:
             db_data.delete_book(conn, book_id)
-        await query.edit_message_caption(caption="✅ Книга успешно удалена.")
+        await query.edit_message_caption(caption="✅ Книга успешно удалена из каталога.")
 
     except Exception as e:
         await query.edit_message_caption(caption=f"❌ Ошибка при удалении книги: {e}")
@@ -479,7 +482,7 @@ async def add_book_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(
-        "Начинаем добавление новой книги.\n\n"
+        "**➕ Добавление новой книги**\n\n"
         "**Шаг 1/5: Введите название книги.**\n\n"
         "Для отмены введите /cancel."
     , parse_mode='Markdown')
@@ -530,7 +533,7 @@ async def get_book_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def skip_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Пропускает шаг добавления обложки."""
     context.user_data['new_book']['cover_image_id'] = None
-    await update.message.reply_text("Обложка пропущена.")
+    await update.message.reply_text("👌 Обложка пропущена.")
     await show_add_confirmation(update, context)
     return CONFIRM_ADD
 
@@ -539,7 +542,7 @@ async def show_add_confirmation(update: Update, context: ContextTypes.DEFAULT_TY
     book_data = context.user_data['new_book']
     
     message_parts = [
-        "**Проверьте данные перед сохранением:**\n",
+        "**🔍 Проверьте данные перед сохранением:**\n",
         f"**Название:** {book_data['name']}",
         f"**Автор:** {book_data['author']}",
         f"**Жанр:** {book_data['genre']}",
@@ -589,7 +592,7 @@ async def add_book_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     context.user_data.pop('new_book', None)
-    await query.edit_message_caption(caption="Добавление книги отменено.", reply_markup=None)
+    await query.edit_message_caption(caption="👌 Добавление книги отменено.", reply_markup=None)
     return ConversationHandler.END
 
 # --------------------------
