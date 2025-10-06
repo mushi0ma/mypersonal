@@ -6,45 +6,69 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# В backup_db.py, модифицировать:
+
 def backup_database():
     """Создает резервную копию базы данных PostgreSQL."""
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_dir = os.getenv('BACKUP_DIR', '/backups')
         
-        # Создаем директорию для бэкапов, если её нет
         os.makedirs(backup_dir, exist_ok=True)
         
         filename = f"{backup_dir}/backup_{timestamp}.sql"
         
-        # Формируем команду pg_dump
         command = [
             'pg_dump',
             '-h', os.getenv('DB_HOST', 'localhost'),
             '-U', os.getenv('DB_USER', 'postgres'),
             '-d', os.getenv('DB_NAME', 'library_db'),
             '-f', filename,
-            '--no-password'  # Используйте PGPASSWORD в переменных окружения
+            '--no-password'
         ]
         
-        # Устанавливаем пароль через переменную окружения
         env = os.environ.copy()
         env['PGPASSWORD'] = os.getenv('DB_PASSWORD', '')
         
-        # Выполняем backup
         result = subprocess.run(command, env=env, capture_output=True, text=True)
         
         if result.returncode == 0:
+            # ✅ ДОБАВИТЬ УВЕДОМЛЕНИЕ АДМИНУ
+            file_size = os.path.getsize(filename) / (1024 * 1024)  # MB
+            
+            # Импортируем tasks здесь, чтобы избежать circular import
+            from tasks import notify_admin
+            notify_admin.delay(
+                text=f"✅ **Backup успешно создан**\n\n"
+                     f"📁 Файл: `{filename}`\n"
+                     f"📊 Размер: {file_size:.2f} MB\n"
+                     f"🕐 Время: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+                category='backup'
+            )
+            
             logger.info(f"✅ Backup успешно создан: {filename}")
-            # Опционально: удаляем старые бэкапы (старше 30 дней)
             cleanup_old_backups(backup_dir, days=30)
             return filename
         else:
-            logger.error(f"❌ Ошибка создания backup: {result.stderr}")
+            error_msg = f"❌ Ошибка создания backup: {result.stderr}"
+            logger.error(error_msg)
+            
+            from tasks import notify_admin
+            notify_admin.delay(
+                text=f"❌ **Ошибка создания backup**\n\n{result.stderr}",
+                category='backup_error'
+            )
             return None
             
     except Exception as e:
-        logger.error(f"❌ Исключение при создании backup: {e}")
+        error_msg = f"❌ Исключение при создании backup: {e}"
+        logger.error(error_msg)
+        
+        from tasks import notify_admin
+        notify_admin.delay(
+            text=f"❌ **Критическая ошибка backup**\n\n`{e}`",
+            category='backup_error'
+        )
         return None
 
 def cleanup_old_backups(backup_dir, days=30):

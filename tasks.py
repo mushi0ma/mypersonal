@@ -9,6 +9,8 @@ import db_data
 from db_utils import get_db_connection
 from datetime import datetime
 from backup_db import backup_database
+from celery import group
+from celery.exceptions import SoftTimeLimitExceeded
 # Загружаем переменные окружения и настраиваем логгер
 load_dotenv()
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -20,6 +22,17 @@ celery_app = Celery(
     broker=os.getenv("CELERY_BROKER_URL"),
     backend=os.getenv("CELERY_RESULT_BACKEND")
 )
+
+celery_app.conf.task_annotations = {
+    'tasks.notify_user': {
+        'rate_limit': '10/s',  # 10 задач в секунду
+        'time_limit': 30,      # Максимум 30 секунд на задачу
+    },
+    'tasks.broadcast_new_book': {
+        'rate_limit': '1/m',   # 1 раз в минуту
+        'time_limit': 600,
+    },
+}
 
 # --- ИНИЦИАЛИЗАЦИЯ ДВУХ БОТОВ ---
 try:
@@ -80,9 +93,9 @@ def notify_admin(text: str, category: str = 'audit'):
 
 # --- ВЫСОКОУРОВНЕВЫЕ И ПЕРИОДИЧЕСКИЕ ЗАДАЧИ ---
 
-@celery_app.task
-def broadcast_new_book(book_id: int):
-    """Рассылает уведомление о новой книге всем пользователям."""
+@celery_app.task(bind=True, max_retries=3)
+def broadcast_new_book(self, book_id: int):
+    """Рассылает уведомление о новой книге ПАЧКАМИ."""
     logger.info(f"Запущена рассылка о новой книге с ID: {book_id}")
     try:
         with get_db_connection() as conn:
@@ -93,19 +106,40 @@ def broadcast_new_book(book_id: int):
         button_text = "📖 Посмотреть карточку книги"
         button_callback = f"view_book_{book_id}"
 
-        for user_id in all_user_ids:
-            notify_user(
-                user_id=user_id,
-                text=text,
-                category='new_arrival',
-                button_text=button_text,
-                button_callback=button_callback
+        # ✅ ОТПРАВЛЯЕМ ПАЧКАМИ ПО 50 ШТУК
+        BATCH_SIZE = 50
+        total_sent = 0
+        
+        for i in range(0, len(all_user_ids), BATCH_SIZE):
+            batch = all_user_ids[i:i + BATCH_SIZE]
+            
+            # Создаем группу задач
+            job = group(
+                notify_user.s(
+                    user_id=uid,
+                    text=text,
+                    category='new_arrival',
+                    button_text=button_text,
+                    button_callback=button_callback
+                ) for uid in batch
             )
-        logger.info(f"Рассылка о новой книге завершена для {len(all_user_ids)} пользователей.")
-        notify_admin(f"🚀 Успешно разослано уведомление о новой книге «{book['name']}» для {len(all_user_ids)} пользователей.")
+            
+            # Запускаем пачку
+            job.apply_async()
+            total_sent += len(batch)
+            
+            logger.info(f"Отправлено {total_sent}/{len(all_user_ids)} уведомлений")
+        
+        logger.info(f"Рассылка о новой книге завершена для {total_sent} пользователей.")
+        notify_admin.delay(f"🚀 Успешно разослано уведомление о новой книге «{book['name']}» для {total_sent} пользователей.")
+        
+    except SoftTimeLimitExceeded:
+        logger.error("Превышен лимит времени для рассылки")
+        self.retry(countdown=60)  # Повторить через минуту
     except Exception as e:
         logger.error(f"Ошибка в задаче broadcast_new_book: {e}")
-        notify_admin(f"❗️ Ошибка при рассылке о новой книге (ID: {book_id}): {e}")
+        notify_admin.delay(f"❗️ Ошибка при рассылке о новой книге (ID: {book_id}): {e}")
+        raise self.retry(exc=e, countdown=30)
 
 @celery_app.task
 def check_due_dates_and_notify():
@@ -188,6 +222,15 @@ def backup_database_task():
     """Celery задача для backup базы данных."""
     return backup_database()
 
+@celery_app.task
+def health_check_task():
+    """Периодическая проверка здоровья системы."""
+    from health_check import run_health_check
+    all_ok, message = run_health_check()
+    if not all_ok:
+        logger.error("Health check failed!")
+    return all_ok
+
 # --- Расписание для периодических задач (Celery Beat) ---
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
@@ -201,5 +244,9 @@ celery_app.conf.beat_schedule = {
     'daily-database-backup': {
         'task': 'celery_tasks.backup_database_task',
         'schedule': crontab(hour=3, minute=0),  # Каждый день в 3:00
+    },
+    'health-check-every-hour': {
+    'task': 'tasks.health_check_task',
+    'schedule': crontab(minute=0),  # Каждый час
     },
 }

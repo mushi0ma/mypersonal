@@ -322,19 +322,32 @@ def get_book_card_details(conn, book_id: int):
         return book_details
 
 def update_book_field(conn, book_id: int, field: str, value: str):
-    """Обновляет указанное поле для указанной книги."""
-    allowed_fields = ["name", "author", "genre", "description"]
-    if field not in allowed_fields:
-        raise ValueError("Недопустимое поле для обновления")
+    """Обновляет указанное поле для указанной книги (безопасно)."""
+    # Маппинг разрешенных полей
+    ALLOWED_FIELDS = {
+        "name": "name",
+        "author": "author_id",  # Обрабатывается отдельно
+        "genre": "genre",
+        "description": "description"
+    }
+    
+    if field not in ALLOWED_FIELDS:
+        raise ValueError(f"Недопустимое поле: {field}")
     
     with conn.cursor() as cur:
-        # Если меняем автора, нужно найти/создать его ID
         if field == 'author':
             author_id = get_or_create_author(conn, value)
-            cur.execute("UPDATE books SET author_id = %s WHERE id = %s", (author_id, book_id))
+            cur.execute(
+                "UPDATE books SET author_id = %s WHERE id = %s",
+                (author_id, book_id)
+            )
         else:
-            sql = f"UPDATE books SET {field} = %s WHERE id = %s"
-            cur.execute(sql, (value, book_id))
+            # Используем psycopg2.sql для безопасного построения запроса
+            from psycopg2 import sql
+            query = sql.SQL("UPDATE books SET {} = %s WHERE id = %s").format(
+                sql.Identifier(ALLOWED_FIELDS[field])
+            )
+            cur.execute(query, (value, book_id))
 
 def delete_book(conn, book_id: int):
     """Удаляет книгу и все связанные с ней записи (благодаря ON DELETE CASCADE)."""
@@ -438,21 +451,44 @@ def get_user_borrow_history(conn, user_id: int):
         return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 def borrow_book(conn, user_id: int, book_id: int):
-    """Обрабатывает взятие книги и возвращает дату, до которой нужно вернуть."""
+    """Обрабатывает взятие книги. Возвращает due_date."""
+    from datetime import date, timedelta
+    
     with conn.cursor() as cur:
-        cur.execute("BEGIN")  # Начинаем транзакцию
-        cur.execute(
-            "SELECT available_quantity FROM books WHERE id = %s FOR UPDATE",  # Блокировка строки
-            (book_id,)
-        )
-        available = cur.fetchone()[0]
-        if available > 0:
+        try:
+            # Блокируем строку для изменения
+            cur.execute(
+                "SELECT available_quantity FROM books WHERE id = %s FOR UPDATE",
+                (book_id,)
+            )
+            available = cur.fetchone()
+            
+            if not available or available[0] <= 0:
+                raise ValueError("Книга недоступна для взятия")
+            
+            # Уменьшаем количество
             cur.execute(
                 "UPDATE books SET available_quantity = available_quantity - 1 WHERE id = %s",
                 (book_id,)
             )
-        # return cur.fetchone()[0]
-        cur.execute("COMMIT")
+            
+            # Создаем запись о займе
+            due_date = date.today() + timedelta(days=14)
+            cur.execute(
+                """
+                INSERT INTO borrowed_books (user_id, book_id, borrow_date, due_date)
+                VALUES (%s, %s, CURRENT_DATE, %s)
+                RETURNING due_date
+                """,
+                (user_id, book_id, due_date)
+            )
+            
+            return cur.fetchone()[0]
+            
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Ошибка при займе книги: {e}")
+            raise DatabaseError(f"Не удалось взять книгу: {e}")
 
 def return_book(conn, borrow_id: int, book_id: int):
     """Обрабатывает возврат книги."""

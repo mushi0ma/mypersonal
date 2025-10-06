@@ -21,6 +21,7 @@ from telegram import Bot
 from functools import wraps
 from time import time
 from collections import defaultdict
+import threading
 
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import db_data
@@ -45,6 +46,7 @@ logger.addHandler(handler)
 # --- Загрузка конфигурации из .env ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 NOTIFICATION_BOT_TOKEN = os.getenv("NOTIFICATION_BOT_TOKEN")  # ✅ ДОБАВЛЕНО
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 
 # Создаем отдельный экземпляр для бота-уведомителя
 notification_bot = Bot(token=NOTIFICATION_BOT_TOKEN)
@@ -77,6 +79,35 @@ notification_bot = Bot(token=NOTIFICATION_BOT_TOKEN)
 
 user_last_request = {}
 user_violations = defaultdict(int)
+violation_timestamps = defaultdict(float)
+
+# Настройки очистки
+CLEANUP_INTERVAL = 3600  # Очистка каждый час
+VIOLATION_RESET_TIME = 86400  # Сброс нарушений через 24 часа
+
+def cleanup_rate_limit_data():
+    """Периодическая очистка устаревших данных."""
+    now = time()
+    
+    # Очищаем старые нарушения
+    expired_users = [
+        user_id for user_id, timestamp in violation_timestamps.items()
+        if now - timestamp > VIOLATION_RESET_TIME
+    ]
+    
+    for user_id in expired_users:
+        user_violations.pop(user_id, None)
+        violation_timestamps.pop(user_id, None)
+        user_last_request.pop(user_id, None)
+    
+    if expired_users:
+        logger.info(f"Очищено {len(expired_users)} записей rate limit")
+    
+    # Запланировать следующую очистку
+    threading.Timer(CLEANUP_INTERVAL, cleanup_rate_limit_data).start()
+
+# Запустить очистку при старте
+cleanup_rate_limit_data()
 
 
 # --------------------------
@@ -84,41 +115,25 @@ user_violations = defaultdict(int)
 # --------------------------
 
 def rate_limit(seconds=2, alert_admins=False):
-    """
-    Декоратор для ограничения частоты запросов к боту.
-    
-    Args:
-        seconds: Минимальное количество секунд между запросами
-        alert_admins: Отправлять ли уведомление админу при частых нарушениях
-    
-    Использование:
-        @rate_limit(seconds=3)
-        async def my_function(update, context):
-            pass
-    """
     def decorator(func):
         @wraps(func)
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            # Получаем ID пользователя
             user_id = update.effective_user.id
             now = time()
             
-            # Проверяем, был ли недавний запрос от этого пользователя
             if user_id in user_last_request:
                 time_passed = now - user_last_request[user_id]
                 
                 if time_passed < seconds:
-                    # Запрос слишком частый - блокируем
                     user_violations[user_id] += 1
+                    violation_timestamps[user_id] = now  # ✅ ОБНОВЛЯЕМ TIMESTAMP
                     
-                    # Логируем подозрительную активность
                     logger.warning(
                         f"Rate limit exceeded by user {user_id} "
                         f"({update.effective_user.username}). "
                         f"Violations: {user_violations[user_id]}"
                     )
                     
-                    # Если много нарушений - уведомляем админа
                     if alert_admins and user_violations[user_id] > 10:
                         tasks.notify_admin.delay(
                             text=f"⚠️ **Подозрительная активность**\n\n"
@@ -128,13 +143,10 @@ def rate_limit(seconds=2, alert_admins=False):
                                  f"**Функция:** `{func.__name__}`",
                             category='security_alert'
                         )
-                        # Сбрасываем счетчик, чтобы не спамить админа
                         user_violations[user_id] = 0
                     
-                    # Отправляем предупреждение пользователю
                     wait_time = int(seconds - time_passed) + 1
                     
-                    # Проверяем, есть ли message (для обычных сообщений)
                     if update.message:
                         await update.message.reply_text(
                             f"⏱ **Пожалуйста, подождите**\n\n"
@@ -142,20 +154,17 @@ def rate_limit(seconds=2, alert_admins=False):
                             f"Попробуйте снова через {wait_time} сек.",
                             parse_mode='Markdown'
                         )
-                    # Для callback queries просто показываем alert
                     elif update.callback_query:
                         await update.callback_query.answer(
                             f"⏱ Подождите {wait_time} сек.",
                             show_alert=True
                         )
                     
-                    return  # Не выполняем функцию
+                    return
             
-            # Сохраняем время последнего запроса
             user_last_request[user_id] = now
-            user_violations[user_id] = 0  # Сбрасываем счетчик нарушений
+            user_violations[user_id] = 0
             
-            # Выполняем оригинальную функцию
             return await func(update, context)
         
         return wrapper
@@ -174,7 +183,7 @@ def normalize_phone_number(contact: str) -> str:
 def get_user_borrow_limit(status):
     return {'студент': 3, 'учитель': 5}.get(status.lower(), 0)
 
-@rate_limit(seconds=10, alert_admins=True)
+@rate_limit(seconds=5, alert_admins=True)
 async def send_verification_message(contact_info: str, code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int):
     """
     Отправляет код верификации:
@@ -272,6 +281,7 @@ async def send_self_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE,
     except Exception as e:
         logger.error(f"Ошибка при отправке кода самому себе: {e}")
         return False
+    
 
 # --------------------------
 # --- ОСНОВНЫЕ ОБРАБОТЧИКИ ---
@@ -380,39 +390,40 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     """Получает первый пароль, сохраняет его и запрашивает подтверждение."""
     password = update.message.text
     
-    # ✅ Скрываем пароль в истории
+    # ✅ НЕМЕДЛЕННО УДАЛЯЕМ СООБЩЕНИЕ С ПАРОЛЕМ
     try:
-        hidden_password_text = "•" * len(password)
-        await update.message.edit_text(f"🔒 (пароль скрыт) {hidden_password_text}")
+        await update.message.delete()
     except Exception as e:
-        logger.warning(f"Не удалось скрыть пароль: {e}")
+        logger.warning(f"Не удалось удалить сообщение с паролем: {e}")
     
-    # ✅ Улучшенная валидация
+    # Валидация...
     if len(password) < 8:
-        await update.message.reply_text(
-            "❌ Пароль слишком короткий. Минимум **8 символов**.\n\nПопробуйте снова:",
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Пароль слишком короткий. Минимум **8 символов**.\n\nПопробуйте снова:",
             parse_mode='Markdown'
         )
         return REGISTER_PASSWORD
     
-    # Проверка на наличие букв и цифр/спецсимволов
     has_letter = any(c.isalpha() for c in password)
     has_digit_or_special = any(c.isdigit() or not c.isalnum() for c in password)
     
     if not (has_letter and has_digit_or_special):
-        await update.message.reply_text(
-            "❌ Пароль должен содержать:\n"
-            "• Минимум 8 символов\n"
-            "• Буквы (A-Z, a-z)\n"
-            "• Цифры (0-9) или спецсимволы (!@#$...)\n\n"
-            "Попробуйте снова:",
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Пароль должен содержать:\n"
+                 "• Минимум 8 символов\n"
+                 "• Буквы (A-Z, a-z)\n"
+                 "• Цифры (0-9) или спецсимволы (!@#$...)\n\n"
+                 "Попробуйте снова:",
             parse_mode='Markdown'
         )
         return REGISTER_PASSWORD
     
     context.user_data['registration']['password_temp'] = password
-    await update.message.reply_text(
-        "👍 Отлично. Теперь **введите пароль еще раз** для подтверждения:", 
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="👍 Отлично. Теперь **введите пароль еще раз** для подтверждения:", 
         parse_mode='Markdown'
     )
     return REGISTER_CONFIRM_PASSWORD
@@ -567,44 +578,72 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("❌ Пользователь не найден. Попробуйте еще раз или зарегистрируйтесь.")
         return LOGIN_CONTACT
 
+# В librarybot.py, добавить:
+
+login_lockouts = {}  # {user_id: (lockout_until_timestamp, attempts)}
+
 async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = context.user_data['login_user']
+    user_id = user['id']
     stored_hash = user['password_hash']
     input_password = update.message.text
+    
+    # ✅ ПРОВЕРКА БЛОКИРОВКИ
+    if user_id in login_lockouts:
+        lockout_until, _ = login_lockouts[user_id]
+        if time() < lockout_until:
+            remaining = int(lockout_until - time())
+            await update.message.reply_text(
+                f"🔒 Вход заблокирован на {remaining} секунд из-за множественных неудачных попыток."
+            )
+            return LOGIN_PASSWORD
+        else:
+            # Блокировка истекла
+            login_lockouts.pop(user_id, None)
+
+    # Удаляем пароль
+    try:
+        await update.message.delete()
+    except:
+        pass
 
     if hash_password(input_password) == stored_hash:
-        # --- Успешный вход ---
+        # Успешный вход
         with get_db_connection() as conn:
             db_data.log_activity(conn, user_id=user['id'], action="login")
         
-        # Очищаем счетчик неудачных попыток
         context.user_data.pop('login_attempts', None)
+        login_lockouts.pop(user_id, None)  # ✅ УБИРАЕМ БЛОКИРОВКУ
         
         await update.message.reply_text(f"🎉 Добро пожаловать, {user['full_name']}!")
         context.user_data['current_user'] = user
         context.user_data.pop('login_user')
         return await user_menu(update, context)
     else:
-        # --- Неудачный вход ---
-        # Увеличиваем счетчик
         attempts = context.user_data.get('login_attempts', 0) + 1
         context.user_data['login_attempts'] = attempts
 
-        # Проверяем, достигнут ли порог
         if attempts >= 3:
-            # Отправляем уведомление администратору
+            # ✅ БЛОКИРУЕМ НА 5 МИНУТ
+            lockout_duration = 300  # 5 минут
+            lockout_until = time() + lockout_duration
+            login_lockouts[user_id] = (lockout_until, attempts)
+            
             admin_text = (
-                f"🔑 **[АУДИТ БЕЗОПАСНОСТИ]**\n\n"
+                f"🔒 **[АУДИТ БЕЗОПАСНОСТИ]**\n\n"
                 f"Замечено {attempts} неудачных попытки входа для пользователя "
-                f"@{user.get('username', user.get('contact_info'))}."
+                f"@{user.get('username', user.get('contact_info'))}.\n\n"
+                f"Вход заблокирован на 5 минут."
             )
             tasks.notify_admin.delay(text=admin_text, category='security_alert')
             
-            # Сбрасываем счетчик, чтобы не спамить
             context.user_data['login_attempts'] = 0
             
-            await update.message.reply_text("❌ Неверный пароль. Вы исчерпали количество попыток. Попробуйте восстановить пароль.")
-            return await start_login(update, context) # Возвращаем на начало входа
+            await update.message.reply_text(
+                f"❌ Неверный пароль. Вы исчерпали количество попыток.\n\n"
+                f"🔒 Вход заблокирован на 5 минут."
+            )
+            return await start_login(update, context)
         else:
             await update.message.reply_text(f"❌ Неверный пароль. Осталось попыток: {3 - attempts}.")
             return LOGIN_PASSWORD
@@ -829,7 +868,7 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- ФУНКЦИИ РАБОТЫ С КНИГАМИ ---
 
-@rate_limit(seconds=3)
+@rate_limit(seconds=3, alert_admins=True)
 async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -934,7 +973,7 @@ async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.edit_message_text(message_text, reply_markup=reply_markup)
     return USER_RETURN_BOOK
 
-@rate_limit(seconds=3)
+@rate_limit(seconds=3, alert_admins=True)
 async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -1345,7 +1384,7 @@ async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
     return GETTING_SEARCH_QUERY
 
-@rate_limit(seconds=2, alert_admins=True)
+@rate_limit(seconds=2)
 async def process_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Ищет книги, показывает первую страницу результатов и сохраняет запрос."""
     search_term = update.message.text
@@ -1879,6 +1918,34 @@ async def export_user_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption="📄 Ваши данные из системы библиотеки"
     )
 
+async def show_rate_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает статистику rate limiting (только для админов)."""
+    user_id = update.effective_user.id
+    
+    # Проверка, что это админ
+    if user_id != ADMIN_TELEGRAM_ID:
+        return
+    
+    total_users = len(user_last_request)
+    violators = len([v for v in user_violations.values() if v > 0])
+    top_violators = sorted(
+        user_violations.items(), 
+        key=lambda x: x[1], 
+        reverse=True
+    )[:5]
+    
+    message = (
+        f"📊 **Статистика Rate Limiting**\n\n"
+        f"👥 Всего пользователей: {total_users}\n"
+        f"⚠️ С нарушениями: {violators}\n\n"
+        f"**Топ нарушителей:**\n"
+    )
+    
+    for i, (uid, count) in enumerate(top_violators, 1):
+        message += f"{i}. User ID {uid}: {count} нарушений\n"
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -1892,7 +1959,8 @@ def main() -> None:
 
     """Запускает основного бота."""
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-
+    application = Application.builder().token(ADMIN_TELEGRAM_ID).build()
+    application.add_handler(CommandHandler("rate_stats", show_rate_stats))
     # --- Вложенный обработчик для редактирования профиля ---
     edit_profile_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_profile_edit, pattern="^edit_profile$")],
