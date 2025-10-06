@@ -183,7 +183,6 @@ def normalize_phone_number(contact: str) -> str:
 def get_user_borrow_limit(status):
     return {'студент': 3, 'учитель': 5}.get(status.lower(), 0)
 
-@rate_limit(seconds=5, alert_admins=True)
 async def send_verification_message(contact_info: str, code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int):
     """
     Отправляет код верификации:
