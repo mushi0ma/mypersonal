@@ -594,6 +594,9 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         context.user_data['login_attempts'] = 0
 
+        keyboard = [[InlineKeyboardButton("🤔 Забыли пароль?", callback_data="forgot_password")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
         await update.message.reply_text("🔑 Введите ваш **пароль**:", parse_mode='Markdown')
         return LOGIN_PASSWORD
     except db_data.NotFoundError:
