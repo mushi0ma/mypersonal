@@ -23,9 +23,7 @@ async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     """Начинает процесс входа."""
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("🤔 Забыли пароль?", callback_data="forgot_password")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("👤 Введите ваш **юзернейм** или **контакт** для входа:", reply_markup=reply_markup, parse_mode='Markdown')
+    await query.edit_message_text("👤 Введите ваш **юзернейм** или **контакт** для входа:", parse_mode='Markdown')
     return State.LOGIN_CONTACT
 
 async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -37,7 +35,11 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             user = db_data.get_user_by_login(conn, contact_processed)
         context.user_data['login_user'] = user
         context.user_data['login_attempts'] = 0
-        await update.message.reply_text("🔑 Введите ваш **пароль**:", parse_mode='Markdown')
+
+        keyboard = [[InlineKeyboardButton("🤔 Забыли пароль?", callback_data="forgot_password")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text("🔑 Введите ваш **пароль**:", reply_markup=reply_markup, parse_mode='Markdown')
         return State.LOGIN_PASSWORD
     except db_data.NotFoundError:
         await update.message.reply_text("❌ Пользователь не найден. Попробуйте еще раз или зарегистрируйтесь.")
