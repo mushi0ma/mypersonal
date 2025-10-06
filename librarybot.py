@@ -2023,7 +2023,6 @@ def main() -> None:
 
     """Запускает основного бота."""
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    application = Application.builder().token(ADMIN_TELEGRAM_ID).build()
     application.add_handler(CommandHandler("rate_stats", show_rate_stats))
     # --- Вложенный обработчик для редактирования профиля ---
     edit_profile_handler = ConversationHandler(
