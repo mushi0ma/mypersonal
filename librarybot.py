@@ -434,22 +434,36 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
     и отправляет его на подписку к боту-уведомителю.
     """
     password_confirm = update.message.text
-    hidden_password_text = "•" * len(password_confirm)
-    await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
+    
+    # ✅ НЕМЕДЛЕННО УДАЛЯЕМ СООБЩЕНИЕ С ПАРОЛЕМ
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение с подтверждением пароля: {e}")
 
-    # Проверка совпадения паролей (эта часть остается без изменений)
+    # Проверка совпадения паролей
     if context.user_data['registration'].get('password_temp') != password_confirm:
-        await update.message.reply_text("❌ Пароли не совпадают. Пожалуйста, придумайте пароль заново.")
-        await update.message.reply_text("🔑 Создайте **пароль** (минимум 8 символов):", parse_mode='Markdown')
+        # Отправляем новое сообщение вместо ответа на удаленное
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Пароли не совпадают. Пожалуйста, придумайте пароль заново."
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="🔑 Создайте **пароль** (минимум 8 символов):",
+            parse_mode='Markdown'
+        )
         return REGISTER_PASSWORD
 
     context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
     
-    await update.message.reply_text(
-        "✅ Пароль сохранен!\n\n"
-        "⏳ Создаю ваш аккаунт...",
+    # Отправляем новое сообщение
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="✅ Пароль сохранен!\n\n⏳ Создаю ваш аккаунт...",
         parse_mode='Markdown'
     )
+    
     # --- НАЧАЛО НОВОЙ ЛОГИКИ ---
     user_data = context.user_data['registration']
     
@@ -474,25 +488,34 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         # 5. Отправляем финальное сообщение и переходим в состояние ожидания
-        await update.message.reply_text(
-            "🎉 **Отлично! Аккаунт создан.**\n\n"
-            "**Последний шаг:** подпишитесь на нашего бота-уведомителя. "
-            "Он будет присылать вам коды верификации и важные оповещения.\n\n"
-            "👉 Нажмите на кнопку ниже, запустите бота, "
-            "а затем вернитесь сюда и нажмите **'Я подписался'**.",
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=(
+                "🎉 **Отлично! Аккаунт создан.**\n\n"
+                "**Последний шаг:** подпишитесь на нашего бота-уведомителя. "
+                "Он будет присылать вам коды верификации и важные оповещения.\n\n"
+                "👉 Нажмите на кнопку ниже, запустите бота, "
+                "а затем вернитесь сюда и нажмите **'Я подписался'**."
+            ),
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
         return AWAITING_NOTIFICATION_BOT
 
     except db_data.UserExistsError:
-        await update.message.reply_text("❌ Ошибка: этот юзернейм или контакт уже заняты.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Ошибка: этот юзернейм или контакт уже заняты."
+        )
         context.user_data.clear()
         return await start(update, context)
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}", exc_info=True)
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при регистрации**\n\n**Функция:** `get_password_confirmation`\n**Ошибка:** `{e}`")
-        await update.message.reply_text("❌ Произошла системная ошибка. Администратор уже уведомлен.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Произошла системная ошибка. Администратор уже уведомлен."
+        )
         context.user_data.clear()
         return await start(update, context)
 
@@ -1274,29 +1297,67 @@ async def check_current_password(update: Update, context: ContextTypes.DEFAULT_T
     """Проверяет текущий пароль пользователя."""
     current_password_input = update.message.text
     stored_hash = context.user_data['current_user']['password_hash']
+
+    # ✅ НЕМЕДЛЕННО УДАЛЯЕМ СООБЩЕНИЕ С ПАРОЛЕМ
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение с текущим паролем: {e}")
     
     if hash_password(current_password_input) == stored_hash:
-        await update.message.reply_text("✅ Пароль верный. Теперь введите **новый** пароль:", parse_mode='Markdown')
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="✅ Пароль верный. Теперь введите **новый** пароль:",
+            parse_mode='Markdown'
+        )
         return EDITING_PASSWORD_NEW
     else:
-        await update.message.reply_text("❌ Неверный пароль. Попробуйте еще раз или нажмите /cancel для отмены.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Неверный пароль. Попробуйте еще раз или нажмите /cancel для отмены."
+        )
         return EDITING_PASSWORD_CURRENT
 
 async def get_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получает новый пароль."""
     new_password = update.message.text
+
+    # ✅ НЕМЕДЛЕННО УДАЛЯЕМ СООБЩЕНИЕ С ПАРОЛЕМ
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение с новым паролем: {e}")
+
     if len(new_password) < 8:
-        await update.message.reply_text("❌ Пароль должен быть не менее 8 символов. Попробуйте снова.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Пароль должен быть не менее 8 символов. Попробуйте снова."
+        )
         return EDITING_PASSWORD_NEW
+
     context.user_data['new_password_temp'] = new_password
-    await update.message.reply_text("👍 Отлично. Повторите **новый** пароль для подтверждения:", parse_mode='Markdown')
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="👍 Отлично. Повторите **новый** пароль для подтверждения:",
+        parse_mode='Markdown'
+    )
     return EDITING_PASSWORD_CONFIRM
 
 async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Подтверждает и устанавливает новый пароль."""
     confirm_password = update.message.text
+
+    # ✅ НЕМЕДЛЕННО УДАЛЯЕМ СООБЩЕНИЕ С ПАРОЛЕМ
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.warning(f"Не удалось удалить сообщение с подтверждением нового пароля: {e}")
+
     if confirm_password != context.user_data.get('new_password_temp'):
-        await update.message.reply_text("❌ Пароли не совпадают. Попробуйте ввести новый пароль еще раз.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Пароли не совпадают. Попробуйте ввести новый пароль еще раз."
+        )
         return EDITING_PASSWORD_NEW
     
     user_id = context.user_data['current_user']['id']
@@ -1306,7 +1367,10 @@ async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEF
         db_data.update_user_password_by_id(conn, user_id, new_password)
         context.user_data['current_user'] = db_data.get_user_by_id(conn, user_id)
 
-    await update.message.reply_text("🎉 Пароль успешно изменен!")
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="🎉 Пароль успешно изменен!"
+    )
     context.user_data['just_edited_profile'] = True
     return ConversationHandler.END
 
