@@ -1,15 +1,15 @@
 # src/library_bot/handlers/registration.py
 
 import logging
-import os
 import random
 import re
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-import db_data
-from db_utils import get_db_connection
-import tasks
+from src.core.db import data_access as db_data
+from src.core.db.utils import get_db_connection
+from src.core import tasks
+from src.core import config # ✅ Импортируем конфиг
 from src.library_bot.states import State
 from src.library_bot.utils import normalize_phone_number
 from src.library_bot import keyboards
@@ -30,12 +30,12 @@ async def send_verification_message(contact_info: str, code: str, context: Conte
         try:
             message_body = f"Ваш код для библиотеки: {code}"
             message = Mail(
-                from_email=os.getenv("FROM_EMAIL"),
+                from_email=config.FROM_EMAIL, # ✅ Используем конфиг
                 to_emails=contact_info,
                 subject='Код верификации',
                 html_content=f'<strong>{message_body}</strong>'
             )
-            sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
+            sg = SendGridAPIClient(config.SENDGRID_API_KEY) # ✅ Используем конфиг
             sg.send(message)
             context.user_data['verification_method'] = 'email'
             return True

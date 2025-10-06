@@ -5,14 +5,13 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# --- Импорты для работы с БД и задачами ---
-from src import db_data
-from src.db_utils import get_db_connection
-from src import tasks
+# --- Импорты ---
+from src.core import config
+from src.core.db import data_access as db_data
+from src.core.db.utils import get_db_connection
+from src.core import tasks
 
-# Загрузка переменных окружения и настройка
-load_dotenv()
-NOTIFICATION_BOT_TOKEN = os.getenv("NOTIFICATION_BOT_TOKEN")
+# Настройка
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -80,7 +79,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main() -> None:
     """Запускает бота-уведомителя."""
-    application = Application.builder().token(NOTIFICATION_BOT_TOKEN).build()
+    application = Application.builder().token(config.NOTIFICATION_BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     
     logger.info("Бот-уведомитель запущен.") # <-- Заменили print()

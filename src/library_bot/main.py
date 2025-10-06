@@ -1,8 +1,6 @@
 # src/librarybot.py
 import logging
-import os
 from logging.handlers import RotatingFileHandler
-from dotenv import load_dotenv
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,17 +11,15 @@ from telegram.ext import (
 )
 
 # --- Локальные импорты из новой структуры ---
-from library_bot.states import State
-from library_bot.handlers import (
+from src.core import config # ✅ Импортируем конфиг
+from src.library_bot.states import State
+from src.library_bot.handlers import (
     start,
     auth,
     registration,
     user_menu,
     books,
 )
-
-# Загрузка переменных окружения
-load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(
@@ -36,13 +32,10 @@ handler.setFormatter(
 )
 logger.addHandler(handler)
 
-# --- Загрузка конфигурации ---
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
 
 def main() -> None:
     """Запускает основного бота, собирая его из модулей."""
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
     # --- Основной ConversationHandler ---
     conv_handler = ConversationHandler(

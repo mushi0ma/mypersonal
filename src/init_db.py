@@ -1,7 +1,7 @@
 # init_db.py
 import os
 import psycopg2
-from src.db_utils import get_db_connection
+from src.core.db.utils import get_db_connection
 
 SCHEMA_COMMANDS = (
     """

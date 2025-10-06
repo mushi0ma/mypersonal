@@ -5,9 +5,9 @@ from time import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-import db_data
-from db_utils import get_db_connection, hash_password
-import tasks
+from src.core.db import data_access as db_data
+from src.core.db.utils import get_db_connection, hash_password
+from src.core import tasks
 from src.library_bot.states import State
 from src.library_bot.utils import normalize_phone_number
 from src.library_bot.handlers.registration import send_verification_message # Импортируем, чтобы не дублировать

@@ -5,11 +5,11 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-import db_data
-from db_utils import get_db_connection
-import tasks
+from src.core.db import data_access as db_data
+from src.core.db.utils import get_db_connection
+from src.core import tasks
 from src.library_bot.states import State
-from src.library_bot.utils import rate_limit
+from src.core.utils import rate_limit
 from src.library_bot import keyboards
 
 logger = logging.getLogger(__name__)

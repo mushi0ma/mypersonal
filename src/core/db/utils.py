@@ -1,15 +1,13 @@
 # db_utils.py
-import os
 import hashlib
 import psycopg2
 from psycopg2 import pool
-from dotenv import load_dotenv
 import contextlib
 import logging
 
+from src.core import config
+
 # --- Настройка логгера ---
-# Мы настраиваем его здесь, чтобы утилиты могли логировать свои действия,
-# даже если импортируются в скрипты без настроенного логирования.
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -24,15 +22,14 @@ def get_db_pool():
     global db_pool
     if db_pool is None:
         try:
-            load_dotenv() # Убедимся, что переменные окружения загружены
             db_pool = psycopg2.pool.SimpleConnectionPool(
                 minconn=1,
                 maxconn=20,
-                dbname=os.getenv("DB_NAME"),
-                user=os.getenv("DB_USER"),
-                password=os.getenv("DB_PASSWORD"),
-                host=os.getenv("DB_HOST"),
-                port=os.getenv("DB_PORT")
+                dbname=config.DB_NAME,
+                user=config.DB_USER,
+                password=config.DB_PASSWORD,
+                host=config.DB_HOST,
+                port=config.DB_PORT
             )
             logger.info("Пул соединений с базой данных успешно создан.")
         except psycopg2.OperationalError as e:
