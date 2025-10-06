@@ -16,6 +16,10 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram import Bot
+from functools import wraps
+from time import time
+from collections import defaultdict
 
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import db_data
@@ -35,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 # --- Загрузка конфигурации из .env ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+NOTIFICATION_BOT_TOKEN = os.getenv("NOTIFICATION_BOT_TOKEN")  # ✅ ДОБАВЛЕНО
+
+# Создаем отдельный экземпляр для бота-уведомителя
+notification_bot = Bot(token=NOTIFICATION_BOT_TOKEN)
 
 # --- СОСТОЯНИЯ ДИАЛОГА ---
 (
@@ -58,13 +66,95 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     EDITING_PASSWORD_CURRENT, EDITING_PASSWORD_NEW, EDITING_PASSWORD_CONFIRM,
     AWAITING_NOTIFICATION_BOT,
     AWAIT_CONTACT_VERIFICATION_CODE,
-    VIEWING_TOP_BOOKS
-) = range(37)
+    VIEWING_TOP_BOOKS, SHOWING_AUTHORS_LIST, VIEWING_AUTHOR_CARD
+) = range(39)
+
+user_last_request = {}
+user_violations = defaultdict(int)
+
 
 
 # --------------------------
 # --- Вспомогательные функции ---
 # --------------------------
+
+def rate_limit(seconds=2, alert_admins=False):
+    """
+    Декоратор для ограничения частоты запросов к боту.
+    
+    Args:
+        seconds: Минимальное количество секунд между запросами
+        alert_admins: Отправлять ли уведомление админу при частых нарушениях
+    
+    Использование:
+        @rate_limit(seconds=3)
+        async def my_function(update, context):
+            pass
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            # Получаем ID пользователя
+            user_id = update.effective_user.id
+            now = time()
+            
+            # Проверяем, был ли недавний запрос от этого пользователя
+            if user_id in user_last_request:
+                time_passed = now - user_last_request[user_id]
+                
+                if time_passed < seconds:
+                    # Запрос слишком частый - блокируем
+                    user_violations[user_id] += 1
+                    
+                    # Логируем подозрительную активность
+                    logger.warning(
+                        f"Rate limit exceeded by user {user_id} "
+                        f"({update.effective_user.username}). "
+                        f"Violations: {user_violations[user_id]}"
+                    )
+                    
+                    # Если много нарушений - уведомляем админа
+                    if alert_admins and user_violations[user_id] > 10:
+                        tasks.notify_admin.delay(
+                            text=f"⚠️ **Подозрительная активность**\n\n"
+                                 f"**User ID:** `{user_id}`\n"
+                                 f"**Username:** @{update.effective_user.username or 'неизвестно'}\n"
+                                 f"**Нарушений rate limit:** {user_violations[user_id]}\n"
+                                 f"**Функция:** `{func.__name__}`",
+                            category='security_alert'
+                        )
+                        # Сбрасываем счетчик, чтобы не спамить админа
+                        user_violations[user_id] = 0
+                    
+                    # Отправляем предупреждение пользователю
+                    wait_time = int(seconds - time_passed) + 1
+                    
+                    # Проверяем, есть ли message (для обычных сообщений)
+                    if update.message:
+                        await update.message.reply_text(
+                            f"⏱ **Пожалуйста, подождите**\n\n"
+                            f"Вы отправляете запросы слишком часто. "
+                            f"Попробуйте снова через {wait_time} сек.",
+                            parse_mode='Markdown'
+                        )
+                    # Для callback queries просто показываем alert
+                    elif update.callback_query:
+                        await update.callback_query.answer(
+                            f"⏱ Подождите {wait_time} сек.",
+                            show_alert=True
+                        )
+                    
+                    return  # Не выполняем функцию
+            
+            # Сохраняем время последнего запроса
+            user_last_request[user_id] = now
+            user_violations[user_id] = 0  # Сбрасываем счетчик нарушений
+            
+            # Выполняем оригинальную функцию
+            return await func(update, context)
+        
+        return wrapper
+    return decorator
 
 def normalize_phone_number(contact: str) -> str:
     clean_digits = re.sub(r'\D', '', contact)
@@ -80,22 +170,63 @@ def get_user_borrow_limit(status):
     return {'студент': 3, 'учитель': 5}.get(status.lower(), 0)
 
 async def send_verification_message(contact_info: str, code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int):
+    """
+    Отправляет код верификации:
+    1. На email (если это email)
+    2. Через notification_bot в Telegram (если пользователь уже привязал telegram_id)
+    3. Через основного бота (fallback для первичной регистрации)
+    """
     # Попытка отправить на Email
     if re.match(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$", contact_info):
         try:
             message_body = f"Ваш код для библиотеки: {code}"
-            message = Mail(from_email=os.getenv("FROM_EMAIL"), to_emails=contact_info, subject='Код верификации', html_content=f'<strong>{message_body}</strong>')
+            message = Mail(
+                from_email=os.getenv("FROM_EMAIL"), 
+                to_emails=contact_info, 
+                subject='Код верификации', 
+                html_content=f'<strong>{message_body}</strong>'
+            )
             sg = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
             sg.send(message)
             context.user_data['verification_method'] = 'email'
             return True
         except Exception as e:
             logger.error(f"Ошибка при отправке email: {e}")
-            # Если email не удался, все равно отправляем в Telegram
+            # Продолжаем попытку отправки через Telegram
+    
+    # ✅ ИСПРАВЛЕНИЕ: Пытаемся отправить через notification_bot
+    try:
+        # Проверяем, есть ли у пользователя привязанный telegram_id
+        # Это актуально для восстановления пароля и смены контакта
+        user_telegram_id = None
+        try:
+            with get_db_connection() as conn:
+                # Пытаемся найти пользователя по контакту
+                user = db_data.get_user_by_login(conn, contact_info)
+                user_telegram_id = user.get('telegram_id')
+        except db_data.NotFoundError:
+            # Пользователь еще не существует (первичная регистрация)
+            pass
+        
+        if user_telegram_id:
+            # Отправляем через notification_bot
+            message_body = f"🔐 **Код верификации**\n\nВаш код для библиотеки: `{code}`"
+            await notification_bot.send_message(
+                chat_id=user_telegram_id, 
+                text=message_body,
+                parse_mode='Markdown'
+            )
+            context.user_data['verification_method'] = 'notification_bot'
+            logger.info(f"Код отправлен через notification_bot пользователю {user_telegram_id}")
+            return True
+        else:
+            # Fallback: отправляем через основного бота (для первичной регистрации)
+            return await send_self_code_telegram(code, context, telegram_id)
             
-    # Если контакт - не email, или отправка email не удалась,
-    # отправляем сообщение от имени текущего бота.
-    return await send_self_code_telegram(code, context, telegram_id)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке через notification_bot: {e}")
+        # Последний fallback - через основного бота
+        return await send_self_code_telegram(code, context, telegram_id)
 
 def get_back_button(current_state_const: int) -> list:
     """Генерирует кнопку 'Назад', используя имя константы состояния."""
@@ -121,11 +252,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def send_self_code_telegram(code: str, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> bool:
-    """Отправляет код верификации от имени текущего бота."""
+    """Отправляет код верификации от имени текущего (основного) бота."""
     try:
-        message_body = f"Ваш код для библиотеки: {code}"
-        await context.bot.send_message(chat_id=chat_id, text=message_body)
+        message_body = f"📲 Ваш код для библиотеки: `{code}`\n\n_Для получения уведомлений рекомендуем подписаться на бота-уведомителя._"
+        await context.bot.send_message(
+            chat_id=chat_id, 
+            text=message_body,
+            parse_mode='Markdown'
+        )
         context.user_data['verification_method'] = 'self_telegram'
+        logger.info(f"Код отправлен через основного бота пользователю {chat_id}")
         return True
     except Exception as e:
         logger.error(f"Ошибка при отправке кода самому себе: {e}")
@@ -237,13 +373,42 @@ async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получает первый пароль, сохраняет его и запрашивает подтверждение."""
     password = update.message.text
-    hidden_password_text = "•" * len(password)
-    await update.message.edit_text(f"(пароль скрыт) {hidden_password_text}")
-    if not re.match(r"^(?=.*[A-Za-z])(?=.*\d|.*[!@#$%^&*()_+])[A-Za-z\d!@#$%^&*()_+]{8,}$", password):
-        await update.message.reply_text("❌ Пароль должен содержать минимум 8 символов, включая буквы и цифры/спецсимволы. Попробуйте снова.")
+    
+    # ✅ Скрываем пароль в истории
+    try:
+        hidden_password_text = "•" * len(password)
+        await update.message.edit_text(f"🔒 (пароль скрыт) {hidden_password_text}")
+    except Exception as e:
+        logger.warning(f"Не удалось скрыть пароль: {e}")
+    
+    # ✅ Улучшенная валидация
+    if len(password) < 8:
+        await update.message.reply_text(
+            "❌ Пароль слишком короткий. Минимум **8 символов**.\n\nПопробуйте снова:",
+            parse_mode='Markdown'
+        )
         return REGISTER_PASSWORD
+    
+    # Проверка на наличие букв и цифр/спецсимволов
+    has_letter = any(c.isalpha() for c in password)
+    has_digit_or_special = any(c.isdigit() or not c.isalnum() for c in password)
+    
+    if not (has_letter and has_digit_or_special):
+        await update.message.reply_text(
+            "❌ Пароль должен содержать:\n"
+            "• Минимум 8 символов\n"
+            "• Буквы (A-Z, a-z)\n"
+            "• Цифры (0-9) или спецсимволы (!@#$...)\n\n"
+            "Попробуйте снова:",
+            parse_mode='Markdown'
+        )
+        return REGISTER_PASSWORD
+    
     context.user_data['registration']['password_temp'] = password
-    await update.message.reply_text("👍 Отлично. Теперь **введите пароль еще раз** для подтверждения:", parse_mode='Markdown')
+    await update.message.reply_text(
+        "👍 Отлично. Теперь **введите пароль еще раз** для подтверждения:", 
+        parse_mode='Markdown'
+    )
     return REGISTER_CONFIRM_PASSWORD
 
 async def get_password_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -263,6 +428,11 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
 
     context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
     
+    await update.message.reply_text(
+        "✅ Пароль сохранен!\n\n"
+        "⏳ Создаю ваш аккаунт...",
+        parse_mode='Markdown'
+    )
     # --- НАЧАЛО НОВОЙ ЛОГИКИ ---
     user_data = context.user_data['registration']
     
@@ -288,12 +458,15 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
 
         # 5. Отправляем финальное сообщение и переходим в состояние ожидания
         await update.message.reply_text(
-            "✅ Отлично! Вы почти у цели.\n\n"
-            "**Последний шаг:** подпишитесь на нашего бота-уведомителя. Он будет присылать вам коды и важные оповещения. Нажмите на кнопку ниже, запустите бота, а затем вернитесь сюда и нажмите 'Я подписался'.",
+            "🎉 **Отлично! Аккаунт создан.**\n\n"
+            "**Последний шаг:** подпишитесь на нашего бота-уведомителя. "
+            "Он будет присылать вам коды верификации и важные оповещения.\n\n"
+            "👉 Нажмите на кнопку ниже, запустите бота, "
+            "а затем вернитесь сюда и нажмите **'Я подписался'**.",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
-        return AWAITING_NOTIFICATION_BOT # Переходим в новое состояние ожидания
+        return AWAITING_NOTIFICATION_BOT
 
     except db_data.UserExistsError:
         await update.message.reply_text("❌ Ошибка: этот юзернейм или контакт уже заняты.")
@@ -313,7 +486,9 @@ async def check_notification_subscription(update: Update, context: ContextTypes.
     
     user_id = context.user_data.get('user_id_for_activation')
     if not user_id:
-        await query.edit_message_text("❌ Произошла ошибка сессии. Пожалуйста, начните регистрацию заново с /start.")
+        await query.edit_message_text(
+            "❌ Произошла ошибка сессии. Пожалуйста, начните регистрацию заново с /start."
+        )
         return ConversationHandler.END
 
     try:
@@ -321,22 +496,42 @@ async def check_notification_subscription(update: Update, context: ContextTypes.
             user = db_data.get_user_by_id(conn, user_id)
         
         if user.get('telegram_id'):
-            db_data.log_activity(conn, user_id=user_id, action="registration_finish")
+            # ✅ Пользователь успешно привязал Telegram
+            with get_db_connection() as conn:
+                db_data.log_activity(conn, user_id=user_id, action="registration_finish")
 
-            admin_text = f"✅ Новый пользователь @{user.get('telegram_username', user.get('username'))} (ID: {user_id}) успешно завершил регистрацию."
+            # Отправляем уведомление админу
+            admin_text = (
+                f"✅ **Новая регистрация**\n\n"
+                f"**Пользователь:** @{user.get('telegram_username', user.get('username'))}\n"
+                f"**ID:** {user_id}\n"
+                f"**ФИО:** {user.get('full_name')}\n"
+                f"**Статус:** {user.get('status')}"
+            )
             tasks.notify_admin.delay(text=admin_text, category='new_user')
 
-            await query.edit_message_text("🎉 Регистрация полностью завершена! Теперь вы можете войти.")
+            await query.edit_message_text(
+                "🎉 **Регистрация завершена!**\n\n"
+                "Теперь вы можете войти в систему."
+            )
             context.user_data.clear()
             return await start(update, context)
         else:
-            await query.answer("Вы еще не запустили бота-уведомителя. Пожалуйста, сделайте это.", show_alert=True)
+            # Пользователь еще не запустил notification_bot
+            await query.answer(
+                "⚠️ Вы еще не запустили бота-уведомителя. Пожалуйста, нажмите на кнопку выше.", 
+                show_alert=True
+            )
             return AWAITING_NOTIFICATION_BOT
             
     except Exception as e:
-        user_id = context.user_data.get('user_id_for_activation', 'Неизвестно')
-        logger.error(f"Ошибка при проверке подписки для user_id {user_id}: {e}", exc_info=True)
-        tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при проверке подписки**\n\n**UserID:** `{user_id}`\n**Ошибка:** `{e}`")
+        user_id_str = context.user_data.get('user_id_for_activation', 'Неизвестно')
+        logger.error(f"Ошибка при проверке подписки для user_id {user_id_str}: {e}", exc_info=True)
+        tasks.notify_admin.delay(
+            text=f"❗️ **Критическая ошибка при проверке подписки**\n\n"
+                 f"**UserID:** `{user_id_str}`\n"
+                 f"**Ошибка:** `{e}`"
+        )
         await query.edit_message_text("❌ Произошла системная ошибка. Администратор уведомлен.")
         return ConversationHandler.END
 
@@ -489,9 +684,19 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = context.user_data.get('current_user')
     if not user:
         return await start(update, context)
-    with get_db_connection() as conn:
-        borrowed_books = db_data.get_borrowed_books(conn, user['id'])
+    
+    try:
+        with get_db_connection() as conn:
+            borrowed_books = db_data.get_borrowed_books(conn, user['id'])
+            # Обновляем данные пользователя в сессии
+            context.user_data['current_user'] = db_data.get_user_by_id(conn, user['id'])
+            user = context.user_data['current_user']
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке данных меню: {e}")
+        borrowed_books = []
+
     borrow_limit = get_user_borrow_limit(user['status'])
+
     message_text = (
         f"**🏠 Главное меню**\n"
         f"Добро пожаловать, {user['full_name']}!\n\n"
@@ -499,8 +704,12 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     keyboard = [
         [
-            InlineKeyboardButton("🔎 Поиск по названию/автору", callback_data="search_book"),
-            InlineKeyboardButton("📚 Поиск по жанру", callback_data="find_by_genre")
+            InlineKeyboardButton("🔎 Поиск книг", callback_data="search_book"),
+            InlineKeyboardButton("📚 По жанру", callback_data="find_by_genre")
+        ],
+        [
+            InlineKeyboardButton("👥 Все авторы", callback_data="show_authors"),
+            InlineKeyboardButton("🏆 Топ книг", callback_data="top_books")
         ],
         [
             InlineKeyboardButton("📥 Взять книгу", callback_data="search_book"),
@@ -508,21 +717,30 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ],
         [
             InlineKeyboardButton("⭐ Оценить книгу", callback_data="user_rate"),
-            InlineKeyboardButton("🏆 Топ книг", callback_data="top_books") # <-- ДОБАВЛЕНО
+            InlineKeyboardButton("📜 История", callback_data="user_history")
         ],
         [
             InlineKeyboardButton("👤 Профиль", callback_data="user_profile"),
-            InlineKeyboardButton("🚪 Выйти", callback_data="logout")
-        ],
-        [ # Кнопку уведомлений можно вынести на отдельную строку для красоты
             InlineKeyboardButton("📬 Уведомления", callback_data="user_notifications")
+        ],
+        [
+            InlineKeyboardButton("🚪 Выйти", callback_data="logout")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
     if update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.callback_query.edit_message_text(
+            message_text, 
+            reply_markup=reply_markup, 
+            parse_mode='Markdown'
+        )
     else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup, 
+            parse_mode='Markdown'
+        )
     return USER_MENU
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1126,6 +1344,7 @@ async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     )
     return GETTING_SEARCH_QUERY
 
+@rate_limit(seconds=2, alert_admins=True)
 async def process_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Ищет книги, показывает первую страницу результатов и сохраняет запрос."""
     search_term = update.message.text
@@ -1320,11 +1539,192 @@ async def process_book_extension(update: Update, context: ContextTypes.DEFAULT_T
         
     return USER_MENU # В любом случае возвращаемся в главное меню
 
+@rate_limit(seconds=2)
+async def show_authors_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает постраничный список всех авторов."""
+    query = update.callback_query
+    page = 0
+    authors_per_page = 10
+
+    if query:
+        await query.answer()
+        if '_' in query.data:
+            page = int(query.data.split('_')[2])
+    
+    context.user_data['current_authors_page'] = page
+    offset = page * authors_per_page
+
+    try:
+        with get_db_connection() as conn:
+            authors, total_authors = db_data.get_all_authors_paginated(conn, limit=authors_per_page, offset=offset)
+
+        if not authors:
+            keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            message_text = "📚 В библиотеке пока нет авторов."
+            
+            if query:
+                await query.edit_message_text(message_text, reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(message_text, reply_markup=reply_markup)
+            return USER_MENU
+
+        message_text = f"👥 **Авторы в библиотеке** (Всего: {total_authors})\n\nСтраница {page + 1}:"
+        keyboard = []
+        
+        for author in authors:
+            books_count = author['books_count']
+            available_count = author['available_books_count']
+            button_text = f"✍️ {author['name']} ({books_count} книг, {available_count} доступно)"
+            callback_data = f"view_author_{author['id']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        # Кнопки навигации
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"authors_page_{page - 1}"))
+        if (page + 1) * authors_per_page < total_authors:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"authors_page_{page + 1}"))
+        
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+
+        keyboard.append([InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if query:
+            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+        return SHOWING_AUTHORS_LIST
+
+    except Exception as e:
+        error_message = f"❌ Ошибка при получении списка авторов: {e}"
+        logger.error(error_message, exc_info=True)
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `librarybot`**\n\n**Функция:** `show_authors_list`\n**Ошибка:** `{e}`")
+        
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
+        return USER_MENU
+
+
+async def show_author_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает детальную карточку автора с его книгами."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Парсим данные из callback
+    parts = query.data.split('_')
+    author_id = int(parts[2])
+    books_page = int(parts[3]) if len(parts) > 3 else 0
+    
+    current_authors_page = context.user_data.get('current_authors_page', 0)
+    books_per_page = 5
+
+    try:
+        with get_db_connection() as conn:
+            # Получаем информацию об авторе
+            author = db_data.get_author_details(conn, author_id)
+            
+            # Получаем книги автора с пагинацией
+            books, total_books = db_data.get_books_by_author(
+                conn, 
+                author_id, 
+                limit=books_per_page, 
+                offset=books_page * books_per_page
+            )
+
+        # Формируем текст карточки
+        message_parts = [
+            f"👤 **{author['name']}**\n",
+            f"📚 **Всего книг в библиотеке:** {total_books}",
+            f"✅ **Доступно:** {author['available_books_count']}",
+            f"📖 **На руках:** {total_books - author['available_books_count']}\n"
+        ]
+
+        if total_books > 0:
+            total_pages = (total_books + books_per_page - 1) // books_per_page
+            message_parts.append(f"**📖 Книги автора (стр. {books_page + 1}/{total_pages}):**\n")
+            
+            for i, book in enumerate(books, start=1):
+                status_icon = "✅" if book['is_available'] else "❌"
+                message_parts.append(
+                    f"{i}. {status_icon} **{book['name']}**\n"
+                    f"   📅 {book.get('genre', 'Жанр не указан')}"
+                )
+                if book.get('avg_rating'):
+                    stars = "⭐" * round(book['avg_rating'])
+                    message_parts.append(f" | {stars} {book['avg_rating']:.1f}/5.0")
+                message_parts.append("\n")
+        else:
+            message_parts.append("_У этого автора пока нет книг в библиотеке._")
+
+        message_text = "\n".join(message_parts)
+
+        # Формируем клавиатуру
+        keyboard = []
+        
+        # Кнопки для просмотра книг
+        if books:
+            book_buttons = []
+            for i, book in enumerate(books, start=1):
+                book_buttons.append(
+                    InlineKeyboardButton(f"📖 {i}", callback_data=f"view_book_{book['id']}")
+                )
+            # Разбиваем на строки по 5 кнопок
+            for i in range(0, len(book_buttons), 5):
+                keyboard.append(book_buttons[i:i+5])
+        
+        # Навигация по страницам книг
+        if total_books > books_per_page:
+            nav_buttons = []
+            if books_page > 0:
+                nav_buttons.append(
+                    InlineKeyboardButton("⬅️ Книги", callback_data=f"view_author_{author_id}_{books_page - 1}")
+                )
+            nav_buttons.append(
+                InlineKeyboardButton(f"{books_page + 1}/{(total_books + books_per_page - 1) // books_per_page}", callback_data="ignore")
+            )
+            if (books_page + 1) * books_per_page < total_books:
+                nav_buttons.append(
+                    InlineKeyboardButton("Книги ➡️", callback_data=f"view_author_{author_id}_{books_page + 1}")
+                )
+            keyboard.append(nav_buttons)
+
+        # Кнопка возврата
+        keyboard.append([
+            InlineKeyboardButton("⬅️ К списку авторов", callback_data=f"authors_page_{current_authors_page}")
+        ])
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+        
+        return VIEWING_AUTHOR_CARD
+
+    except db_data.NotFoundError:
+        await query.edit_message_text("❌ Автор не найден.")
+        return await show_authors_list(update, context)
+    except Exception as e:
+        error_message = f"❌ Ошибка при получении карточки автора: {e}"
+        logger.error(error_message, exc_info=True)
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `librarybot`**\n\n**Функция:** `show_author_card`\n**Ошибка:** `{e}`")
+        await query.edit_message_text(error_message)
+        return USER_MENU
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
 
+async def ignore_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает callback'и, которые должны игнорироваться (например, счетчики страниц)."""
+    query = update.callback_query
+    await query.answer()
+
 def main() -> None:
+
     """Запускает основного бота."""
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -1397,7 +1797,8 @@ def main() -> None:
             CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
             CallbackQueryHandler(start_search, pattern="^search_book$"),
             # Вложенный обработчик
-            edit_profile_handler, 
+            edit_profile_handler,
+            CallbackQueryHandler(show_authors_list, pattern="^show_authors$"),
             # Возврат в меню
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
         ],
@@ -1451,9 +1852,22 @@ def main() -> None:
             CallbackQueryHandler(start_search, pattern="^search_book$"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
             CallbackQueryHandler(navigate_search_results, pattern="^search_page_"),
+            CallbackQueryHandler(ignore_callback, pattern="^ignore$"),
         ],
         VIEWING_TOP_BOOKS: [
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        SHOWING_AUTHORS_LIST: [
+        CallbackQueryHandler(show_author_card, pattern=r"^view_author_"),
+        CallbackQueryHandler(show_authors_list, pattern="^authors_page_"),
+        CallbackQueryHandler(user_menu, pattern="^user_menu$")
+        ],
+        VIEWING_AUTHOR_CARD: [
+            CallbackQueryHandler(show_author_card, pattern=r"^view_author_"),
+            CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
+            CallbackQueryHandler(show_authors_list, pattern="^authors_page_"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$"),
+            CallbackQueryHandler(ignore_callback, pattern="^ignore$"),
         ],
     }
 

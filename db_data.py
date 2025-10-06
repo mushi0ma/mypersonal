@@ -26,17 +26,34 @@ class UserExistsError(DatabaseError):
 # ==============================================================================
 
 def add_user(conn, data: dict):
-    """Добавляет нового пользователя."""
+    """
+    Добавляет нового пользователя.
+    telegram_id и telegram_username могут быть None (заполняются позже).
+    """
     hashed_pass = hash_password(data['password'])
     with conn.cursor() as cur:
         try:
             cur.execute(
                 """
-                INSERT INTO users (username, telegram_id, telegram_username, full_name, dob, contact_info, status, password_hash, registration_date)
+                INSERT INTO users (
+                    username, telegram_id, telegram_username, 
+                    full_name, dob, contact_info, status, 
+                    password_hash, registration_date
+                )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id;
                 """,
-                (data['username'], data.get('telegram_id'), data.get('telegram_username'), data['full_name'], data['dob'], data['contact_info'], data['status'], hashed_pass, datetime.now())
+                (
+                    data['username'], 
+                    data.get('telegram_id'),  # ✅ Может быть None
+                    data.get('telegram_username'),  # ✅ Может быть None
+                    data['full_name'], 
+                    data['dob'], 
+                    data['contact_info'], 
+                    data['status'], 
+                    hashed_pass, 
+                    datetime.now()
+                )
             )
             user_id = cur.fetchone()[0]
             return user_id
@@ -423,14 +440,19 @@ def get_user_borrow_history(conn, user_id: int):
 def borrow_book(conn, user_id: int, book_id: int):
     """Обрабатывает взятие книги и возвращает дату, до которой нужно вернуть."""
     with conn.cursor() as cur:
-        cur.execute("UPDATE books SET available_quantity = available_quantity - 1 WHERE id = %s AND available_quantity > 0", (book_id,))
-        if cur.rowcount == 0:
-            return None
+        cur.execute("BEGIN")  # Начинаем транзакцию
         cur.execute(
-            "INSERT INTO borrowed_books (user_id, book_id, due_date) VALUES (%s, %s, CURRENT_DATE + INTERVAL '14 day') RETURNING due_date", 
-            (user_id, book_id)
+            "SELECT available_quantity FROM books WHERE id = %s FOR UPDATE",  # Блокировка строки
+            (book_id,)
         )
-        return cur.fetchone()[0]
+        available = cur.fetchone()[0]
+        if available > 0:
+            cur.execute(
+                "UPDATE books SET available_quantity = available_quantity - 1 WHERE id = %s",
+                (book_id,)
+            )
+        # return cur.fetchone()[0]
+        cur.execute("COMMIT")
 
 def return_book(conn, borrow_id: int, book_id: int):
     """Обрабатывает возврат книги."""
@@ -588,3 +610,134 @@ def get_users_with_books_due_soon(conn, days_ahead: int = 2):
         )
         columns = [desc[0] for desc in cur.description]
         return [dict(zip(columns, row)) for row in cur.fetchall()]
+    
+def get_all_authors_paginated(conn, limit: int, offset: int):
+    """
+    Возвращает постраничный список авторов с количеством их книг.
+    
+    Returns:
+        tuple: (список авторов, общее количество)
+    """
+    with conn.cursor() as cur:
+        # Получаем общее количество авторов
+        cur.execute("SELECT COUNT(*) FROM authors")
+        total_authors = cur.fetchone()[0]
+        
+        # Получаем авторов с подсчетом книг
+        cur.execute(
+            """
+            SELECT 
+                a.id,
+                a.name,
+                COUNT(DISTINCT b.id) as books_count,
+                COUNT(DISTINCT CASE 
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM borrowed_books bb 
+                        WHERE bb.book_id = b.id AND bb.return_date IS NULL
+                    ) THEN b.id 
+                END) as available_books_count
+            FROM authors a
+            LEFT JOIN books b ON a.id = b.author_id
+            GROUP BY a.id, a.name
+            HAVING COUNT(DISTINCT b.id) > 0
+            ORDER BY a.name
+            LIMIT %s OFFSET %s
+            """, (limit, offset)
+        )
+        
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        authors = [dict(zip(columns, row)) for row in rows]
+        
+        return authors, total_authors
+
+
+def get_author_details(conn, author_id: int):
+    """
+    Возвращает детальную информацию об авторе.
+    
+    Args:
+        author_id: ID автора
+        
+    Returns:
+        dict: Информация об авторе
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 
+                a.id,
+                a.name,
+                COUNT(DISTINCT b.id) as total_books,
+                COUNT(DISTINCT CASE 
+                    WHEN NOT EXISTS (
+                        SELECT 1 FROM borrowed_books bb 
+                        WHERE bb.book_id = b.id AND bb.return_date IS NULL
+                    ) THEN b.id 
+                END) as available_books_count
+            FROM authors a
+            LEFT JOIN books b ON a.id = b.author_id
+            WHERE a.id = %s
+            GROUP BY a.id, a.name
+            """, (author_id,)
+        )
+        
+        row = cur.fetchone()
+        if not row:
+            raise NotFoundError("Автор не найден.")
+        
+        columns = [desc[0] for desc in cur.description]
+        return dict(zip(columns, row))
+
+
+def get_books_by_author(conn, author_id: int, limit: int = 10, offset: int = 0):
+    """
+    Возвращает книги конкретного автора с пагинацией.
+    
+    Args:
+        author_id: ID автора
+        limit: Количество книг на страницу
+        offset: Смещение для пагинации
+        
+    Returns:
+        tuple: (список книг, общее количество книг автора)
+    """
+    with conn.cursor() as cur:
+        # Получаем общее количество книг автора
+        cur.execute(
+            "SELECT COUNT(*) FROM books WHERE author_id = %s",
+            (author_id,)
+        )
+        total_books = cur.fetchone()[0]
+        
+        # Получаем книги с информацией о доступности и рейтинге
+        cur.execute(
+            """
+            SELECT 
+                b.id,
+                b.name,
+                b.genre,
+                b.description,
+                CASE 
+                    WHEN EXISTS (
+                        SELECT 1 FROM borrowed_books bb 
+                        WHERE bb.book_id = b.id AND bb.return_date IS NULL
+                    ) THEN FALSE
+                    ELSE TRUE
+                END as is_available,
+                AVG(r.rating) as avg_rating,
+                COUNT(r.rating) as ratings_count
+            FROM books b
+            LEFT JOIN ratings r ON b.id = r.book_id
+            WHERE b.author_id = %s
+            GROUP BY b.id, b.name, b.genre, b.description
+            ORDER BY b.name
+            LIMIT %s OFFSET %s
+            """, (author_id, limit, offset)
+        )
+        
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        books = [dict(zip(columns, row)) for row in rows]
+        
+        return books, total_books

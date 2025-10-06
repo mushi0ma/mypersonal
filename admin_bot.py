@@ -294,6 +294,7 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             await update.message.reply_text(error_message)
 
+
 async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает постраничный список всех книг."""
     query = update.callback_query
