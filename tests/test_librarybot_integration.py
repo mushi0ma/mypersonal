@@ -1,4 +1,4 @@
-# test_librarybot_integration.py
+# tests/test_admin_bot_integration.py
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 from contextlib import contextmanager
@@ -8,102 +8,130 @@ import os
 # Добавляем корневую директорию в путь
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Мокируем внешние зависимости
+# Мокируем внешние зависимости, которые не нужны для этих тестов
 sys.modules['tasks'] = MagicMock()
-sys.modules['sendgrid'] = MagicMock()
-sys.modules['sendgrid.helpers.mail'] = MagicMock()
-sys.modules['twilio'] = MagicMock()
 
-from telegram import Update, User, Message, Chat, CallbackQuery
-from telegram.ext import ContextTypes
-import librarybot
+import admin_bot
 import db_data
+from telegram import Update, User, Message, Chat, CallbackQuery
+from telegram.ext import ContextTypes, ConversationHandler
 
 pytestmark = pytest.mark.asyncio
 
-# --- Вспомогательная функция для создания мок-объектов ---
-def _create_mock_update(text=None, callback_data=None, user_id=12345, chat_id=12345):
-    """Создает мок-объект Update для симуляции действий пользователя."""
+def _create_mock_update(text=None, callback_data=None, photo=None, user_id=1, chat_id=1):
+    """Создает мок-объект Update для симуляции действий админа."""
     update = MagicMock(spec=Update)
     update.effective_chat = MagicMock(spec=Chat, id=chat_id)
-    update.effective_user = MagicMock(spec=User, id=user_id, username='test_tg_user')
+    update.effective_user = MagicMock(spec=User, id=user_id, username='test_admin')
 
-    if text:
+    if text is not None:
         update.message = AsyncMock(spec=Message)
         update.message.text = text
         update.message.from_user = update.effective_user
         update.message.chat_id = chat_id
         update.callback_query = None
     
-    if callback_data:
+    if callback_data is not None:
         update.callback_query = AsyncMock(spec=CallbackQuery)
         update.callback_query.data = callback_data
         update.callback_query.from_user = update.effective_user
+        # Сообщения с callback могут иметь текст или caption
+        update.callback_query.message = AsyncMock(spec=Message)
+        update.callback_query.message.text = "Some previous message"
+        update.callback_query.message.caption = None
+        update.callback_query.message.photo = None
         update.message = None
+
+    if photo:
+        update.message = update.message or AsyncMock(spec=Message)
+        update.message.photo = [MagicMock(file_id="test_photo_file_id")]
+        update.message.text = None
 
     return update
 
-# --- Основной интеграционный тест ---
-
-async def test_full_registration_flow(db_session, monkeypatch):
-    """
-    Интеграционный тест для полного цикла регистрации, включая подписку на уведомителя.
-    """
-    # --- Подготовка ---
-    @contextmanager
-    def mock_get_db_connection():
-        yield db_session
-    monkeypatch.setattr(librarybot, 'get_db_connection', mock_get_db_connection)
-
+@pytest.fixture
+def mock_context():
+    """Создает мок-объект Context."""
     context = MagicMock(spec=ContextTypes.DEFAULT_TYPE)
     context.bot = AsyncMock()
     context.user_data = {}
+    return context
 
-    librarybot.send_verification_message = AsyncMock(return_value=True)
-
-    # --- Шаги с 1 по 9 (остаются без изменений) ---
-    await librarybot.start(_create_mock_update(text="/start"), context)
-    await librarybot.start_registration(_create_mock_update(callback_data="register"), context)
-    await librarybot.get_name(_create_mock_update(text="Тестов Тест Тестович"), context)
-    await librarybot.get_dob(_create_mock_update(text="01.01.1990"), context)
-    await librarybot.get_contact(_create_mock_update(text="test@example.com"), context)
-    code = context.user_data['verification_code']
-    await librarybot.verify_registration_code(_create_mock_update(text=code), context)
-    await librarybot.get_status(_create_mock_update(callback_data="студент"), context)
-    await librarybot.get_username(_create_mock_update(text="test_user_123"), context)
-    await librarybot.get_password(_create_mock_update(text="ValidPassword123"), context)
+async def test_stats_command(db_session, monkeypatch, mock_context):
+    """Тестирует, что команда /stats показывает сводную панель."""
+    @contextmanager
+    def mock_get_db_connection():
+        yield db_session
+    monkeypatch.setattr(admin_bot, 'get_db_connection', mock_get_db_connection)
     
-    # --- Шаг 10: Ввод второго пароля (подтверждение) ---
-    update = _create_mock_update(text="ValidPassword123")
-    next_state = await librarybot.get_password_confirmation(update, context)
-    # --- ИЗМЕНЕНИЕ: Теперь бот ждет подписки на уведомителя ---
-    assert next_state == librarybot.AWAITING_NOTIFICATION_BOT
+    update = _create_mock_update(text="/stats")
+    
+    await admin_bot.show_stats_panel(update, mock_context)
+    
+    # Проверяем, что бот ответил сообщением
+    mock_context.bot.send_message.assert_not_called() # Должен быть reply_text
+    update.message.reply_text.assert_called_once()
+    
+    # Проверяем содержимое ответа
+    call_args = update.message.reply_text.call_args
+    message_text = call_args[0][0]
+    assert "📊 Панель статистики" in message_text
+    assert "Активных пользователей" in message_text
 
-    # --- Шаг 11: Симулируем, что бот-уведомитель сделал свою работу ---
-    # В реальном тесте мы вручную обновляем запись в БД, как это сделал бы notification_bot
-    user_id_for_activation = context.user_data['user_id_for_activation']
-    cursor = db_session.cursor()
-    cursor.execute(
-        "UPDATE users SET telegram_id = %s, telegram_username = %s WHERE id = %s",
-        (12345, 'test_tg_user', user_id_for_activation)
+async def test_add_book_flow(db_session, monkeypatch, mock_context):
+    """Интеграционный тест для полного цикла добавления книги."""
+    @contextmanager
+    def mock_get_db_connection():
+        yield db_session
+    monkeypatch.setattr(admin_bot, 'get_db_connection', mock_get_db_connection)
+    
+    # --- Шаг 1: Начинаем диалог ---
+    update = _create_mock_update(callback_data="admin_add_book_start")
+    state = await admin_bot.add_book_start(update, mock_context)
+    assert state == admin_bot.GET_NAME
+    mock_context.user_data['new_book'] = {} # add_book_start инициализирует это
+
+    # --- Шаг 2-5: Вводим данные ---
+    update = _create_mock_update(text="Война и мир")
+    state = await admin_bot.get_book_name(update, mock_context)
+    assert state == admin_bot.GET_AUTHOR
+
+    update = _create_mock_update(text="Лев Толстой")
+    state = await admin_bot.get_book_author(update, mock_context)
+    assert state == admin_bot.GET_GENRE
+
+    update = _create_mock_update(text="Роман-эпопея")
+    state = await admin_bot.get_book_genre(update, mock_context)
+    assert state == admin_bot.GET_DESCRIPTION
+    
+    update = _create_mock_update(text="Великий роман о русском обществе.")
+    state = await admin_bot.get_book_description(update, mock_context)
+    assert state == admin_bot.GET_COVER
+
+    # --- Шаг 6: Пропускаем обложку ---
+    update = _create_mock_update(text="пропустить")
+    state = await admin_bot.skip_cover(update, mock_context)
+    assert state == admin_bot.CONFIRM_ADD
+    
+    # Проверяем, что бот показал подтверждение
+    update.message.reply_text.assert_called_with(
+        text=pytest.string_containing("🔍 Проверьте данные"),
+        reply_markup=pytest.anything,
+        parse_mode='Markdown'
     )
-    db_session.commit()
-    cursor.close()
 
-    # --- Шаг 12: Нажатие "Я подписался" ---
-    update = _create_mock_update(callback_data="confirm_subscription")
-    next_state = await librarybot.check_notification_subscription(update, context)
-    # --- ИЗМЕНЕНИЕ: Теперь регистрация завершена, и мы возвращаемся на стартовый экран ---
-    assert next_state == librarybot.START_ROUTES
-    
-    # --- Финальная проверка в РЕАЛЬНОЙ БАЗЕ ДАННЫХ ---
+    # --- Шаг 7: Сохраняем книгу ---
+    update = _create_mock_update(callback_data="add_book_save_simple")
+    state = await admin_bot.add_book_save(update, mock_context)
+    assert state == ConversationHandler.END
+
+    # --- Финальная проверка в БД ---
     cursor = db_session.cursor()
-    cursor.execute("SELECT username, full_name, status, telegram_id FROM users WHERE username = 'test_user_123'")
-    user_from_db = cursor.fetchone()
+    cursor.execute("SELECT name, author_id FROM books WHERE name = 'Война и мир'")
+    book_from_db = cursor.fetchone()
+    assert book_from_db is not None
+    
+    cursor.execute("SELECT name FROM authors WHERE id = %s", (book_from_db[1],))
+    author_name = cursor.fetchone()[0]
+    assert author_name == "Лев Толстой"
     cursor.close()
-
-    assert user_from_db is not None
-    assert user_from_db[0] == "test_user_123"
-    assert user_from_db[1] == "Тестов Тест Тестович"
-    assert user_from_db[2] == "студент"
-    assert user_from_db[3] == 12345 # Проверяем, что telegram_id сохранился

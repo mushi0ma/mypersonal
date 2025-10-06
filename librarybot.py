@@ -995,15 +995,6 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("❌ Непредвиденная ошибка. Администратор уже уведомлен.")
         return await user_menu(update, context)
 
-async def initiate_rating_from_return(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    returned_book = context.user_data.get('just_returned_book')
-    if not returned_book:
-        await query.edit_message_text("❌ Ошибка. Информация о книге потеряна.")
-        return await user_menu(update, context)
-    context.user_data['book_to_rate'] = {'id': returned_book['id'], 'name': returned_book['name']}
-    return await select_rating(update, context, from_return=True)
 
 async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query

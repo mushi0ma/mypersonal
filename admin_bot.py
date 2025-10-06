@@ -30,8 +30,7 @@ import tasks
 
 # --- Состояния для диалогов ---
 BROADCAST_MESSAGE = range(1)
-SELECTING_BOOK_FIELD, UPDATING_BOOK_FIELD = range(2, 4) # Смещаем диапазон
-# --- ДОБАВЬТЕ ЭТУ СТРОКУ ---
+SELECTING_BOOK_FIELD, UPDATING_BOOK_FIELD = range(2, 4)
 GET_NAME, GET_AUTHOR, GET_GENRE, GET_DESCRIPTION, GET_COVER, CONFIRM_ADD = range(4, 10)
 
 # --- Ограничение доступа ---
@@ -60,11 +59,11 @@ def calculate_age(dob_string: str) -> str:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Приветственное сообщение для админа."""
     await update.message.reply_text(
-    "👋 **Добро пожаловать в панель администратора!**\n\n"
-    "Здесь вы можете управлять ботом. Доступные команды:\n\n"
-    "📢 /broadcast - Отправить сообщение всем пользователям\n"
-    "📊 /stats - Показать статистику пользователей\n"
-    "📚 /books - Управление каталогом книг"
+        "👋 **Добро пожаловать в панель администратора!**\n\n"
+        "Здесь вы можете управлять ботом. Доступные команды:\n\n"
+        "📊 /stats - Показать статистику и управлять пользователями\n"
+        "📚 /books - Управление каталогом книг\n"
+        "📢 /broadcast - Отправить сообщение всем пользователям"
     )
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -80,7 +79,6 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         with get_db_connection() as conn:
             user_db_ids = db_data.get_all_user_ids(conn)
         for user_id in user_db_ids:
-            # Вызываем новую задачу для уведомления пользователей
             tasks.notify_user.delay(user_id=user_id, text=message_text, category='broadcast')
         await update.message.reply_text(f"✅ Рассылка успешно запущена для {len(user_db_ids)} пользователей.")
 
@@ -92,89 +90,111 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отменяет диалог рассылки."""
-    await update.message.reply_text("👌 Действие отменено.")
+    """Отменяет текущий диалог."""
+    message = "👌 Действие отменено."
+    if update.callback_query:
+        await update.callback_query.answer()
+        # Проверяем, есть ли у сообщения caption (если это фото)
+        if update.callback_query.message.caption:
+            await update.callback_query.edit_message_caption(caption=message)
+        else:
+            await update.callback_query.edit_message_text(message)
+    else:
+        await update.message.reply_text(message)
+        
+    # Очищаем временные данные, если они есть
+    context.user_data.pop('book_to_edit', None)
+    context.user_data.pop('field_to_edit', None)
+    context.user_data.pop('new_book', None)
+    
     return ConversationHandler.END
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает статистику с постраничным списком пользователей."""
+async def show_stats_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает общую статистику системы и кнопки для управления."""
     query = update.callback_query
-    page = 0
-    users_per_page = 5
     if query:
         await query.answer()
-        page = int(query.data.split('_')[2])
-    context.user_data['current_stats_page'] = page
-    offset = page * users_per_page
+
     try:
         with get_db_connection() as conn:
-            users, total_users = db_data.get_all_users(conn, limit=users_per_page, offset=offset)
-        if not users and page == 0:
-            await update.message.reply_text("👥 В базе данных пока нет пользователей.")
-            return
-        message_text = f"📊 **Статистика пользователей** (Всего: {total_users})\n\nСтраница {page + 1}:\nНажмите на пользователя для деталей."
-        keyboard = []
-        for user in users:
-            button_text = f"👤 {user['username']} ({user['full_name']})"
-            callback_data = f"admin_view_user_{user['id']}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"stats_page_{page - 1}"))
-        if (page + 1) * users_per_page < total_users:
-            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"stats_page_{page + 1}"))
-        if nav_buttons:
-            keyboard.append(nav_buttons)
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM users WHERE telegram_id IS NOT NULL")
+            total_users = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM books")
+            total_books = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date IS NULL")
+            currently_borrowed = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date IS NOT NULL AND return_date <= due_date")
+            on_time_returns = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date IS NOT NULL")
+            total_returns = cur.fetchone()[0]
+            on_time_rate = (on_time_returns / total_returns * 100) if total_returns > 0 else 0
+        
+        message = (
+            f"📊 **Панель статистики**\n\n"
+            f"👥 Активных пользователей: **{total_users}**\n"
+            f"📚 Книг в каталоге: **{total_books}**\n"
+            f"📖 Книг на руках: **{currently_borrowed}**\n"
+            f"✅ Книг доступно: **{total_books - currently_borrowed}**\n\n"
+            f"📈 Возвращено вовремя: **{on_time_rate:.1f}%**"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("👥 Посмотреть список пользователей", callback_data="users_list_page_0")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        
         if query:
-            await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
         else:
-            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+            await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+
     except Exception as e:
         error_message = f"❌ Ошибка при получении статистики: {e}"
         logger.error(error_message, exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
-        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `stats`\n**Ошибка:** `{e}`")
-        # Отвечаем пользователю
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `show_stats_panel`\n**Ошибка:** `{e}`")
         if query:
             await query.edit_message_text(error_message)
         else:
             await update.message.reply_text(error_message)
 
-async def show_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает общую статистику системы."""
-    with get_db_connection() as conn:
-        cur = conn.cursor()
-        
-        # Общие метрики
-        cur.execute("SELECT COUNT(*) FROM users WHERE telegram_id IS NOT NULL")
-        total_users = cur.fetchone()[0]
-        
-        cur.execute("SELECT COUNT(*) FROM books")
-        total_books = cur.fetchone()[0]
-        
-        cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date IS NULL")
-        currently_borrowed = cur.fetchone()[0]
-        
-        cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date < due_date")
-        on_time_returns = cur.fetchone()[0]
-        
-        cur.execute("SELECT COUNT(*) FROM borrowed_books")
-        total_borrows = cur.fetchone()[0]
-        
-        on_time_rate = (on_time_returns / total_borrows * 100) if total_borrows > 0 else 0
+async def show_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает постраничный список пользователей."""
+    query = update.callback_query
+    page = int(query.data.split('_')[3])
+    users_per_page = 5
+    await query.answer()
     
-    message = (
-        f"📊 **Статистика системы**\n\n"
-        f"👥 Активных пользователей: **{total_users}**\n"
-        f"📚 Книг в каталоге: **{total_books}**\n"
-        f"📖 Книг на руках: **{currently_borrowed}**\n"
-        f"✅ Книг доступно: **{total_books - currently_borrowed}**\n\n"
-        f"📈 Возврат вовремя: **{on_time_rate:.1f}%**\n"
-        f"📊 Всего выдач: **{total_borrows}**"
-    )
-    
-    await update.message.reply_text(message, parse_mode='Markdown')
+    context.user_data['current_stats_page'] = page
+    offset = page * users_per_page
+    try:
+        with get_db_connection() as conn:
+            users, total_users = db_data.get_all_users(conn, limit=users_per_page, offset=offset)
+        
+        message_text = f"👥 **Список пользователей** (Всего: {total_users})\n\nСтраница {page + 1}:\nНажмите на пользователя для деталей."
+        keyboard = []
+        for user in users:
+            button_text = f"👤 {user['username']} ({user['full_name']})"
+            callback_data = f"admin_view_user_{user['id']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"users_list_page_{page - 1}"))
+        if (page + 1) * users_per_page < total_users:
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"users_list_page_{page + 1}"))
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        keyboard.append([InlineKeyboardButton("📊 Назад к статистике", callback_data="back_to_stats_panel")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
+
+    except Exception as e:
+        error_message = f"❌ Ошибка при получении списка пользователей: {e}"
+        logger.error(error_message, exc_info=True)
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `show_users_list`\n**Ошибка:** `{e}`")
+        await query.edit_message_text(error_message)
 
 async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку пользователя."""
@@ -216,20 +236,15 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("📜 История действий", callback_data=f"admin_activity_{user_id}_0")],
             [InlineKeyboardButton("🗑️ Удалить пользователя", callback_data=f"admin_delete_user_{user_id}")],
-            [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"stats_page_{current_page}")]
+            [InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"users_list_page_{current_page}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
     except Exception as e:
         error_message = f"❌ Ошибка при получении карточки пользователя: {e}"
         logger.error(error_message, exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
         tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `view_user_profile`\n**Ошибка:** `{e}`")
-        # Отвечаем пользователю
-        if query:
-            await query.edit_message_text(error_message)
-        else:
-            await update.message.reply_text(error_message)
+        await query.edit_message_text(error_message)
 
 async def ask_for_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Спрашивает у админа подтверждение на удаление."""
@@ -258,24 +273,22 @@ async def process_delete_confirmation(update: Update, context: ContextTypes.DEFA
         with get_db_connection() as conn:
             user_to_delete = db_data.get_user_by_id(conn, user_id)
             username = user_to_delete.get('username', f'ID: {user_id}')
-            result = db_data.delete_user_by_admin(conn, user_id)
+            db_data.delete_user_by_admin(conn, user_id)
         
         admin_text = f"🗑️ Админ удалил (анонимизировал) пользователя: @{username}"
         tasks.notify_admin.delay(text=admin_text, category='admin_action')
 
         await query.edit_message_text(f"✅ Пользователь успешно удален (анонимизирован).")
+        # Имитируем нажатие кнопки "назад к списку"
+        query.data = f"users_list_page_{current_page}"
+        await show_users_list(update, context)
+
     except Exception as e:
         logger.error(f"Ошибка при удалении пользователя admin'ом: {e}", exc_info=True)
         tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `process_delete_confirmation`\n**Ошибка:** `{e}`")
-
-        # --- УПРОЩЕННЫЙ БЛОК ---
-        # Просто показываем ошибку и кнопку для возврата
-        keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"stats_page_{current_page}")]]
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к списку", callback_data=f"users_list_page_{current_page}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            f"❌ Ошибка при удалении: {e}",
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text(f"❌ Ошибка при удалении: {e}", reply_markup=reply_markup)
 
 async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает постраничный лог активности пользователя."""
@@ -285,7 +298,6 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     parts = query.data.split('_')
     user_id = int(parts[2])
     page = int(parts[3])
-    
     logs_per_page = 10
 
     try:
@@ -303,7 +315,6 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             message_parts.append("  _Нет записей об активности._")
 
-        # Кнопки навигации
         nav_buttons = []
         if page > 0:
             nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"admin_activity_{user_id}_{page - 1}"))
@@ -322,13 +333,8 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         error_message = f"❌ Произошла ошибка при получении логов: {e}"
         logger.error(error_message, exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
         tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `show_user_activity`\n**Ошибка:** `{e}`")
-        # Отвечаем пользователю
-        if query:
-            await query.edit_message_text(error_message)
-        else:
-            await update.message.reply_text(error_message)
+        await query.edit_message_text(error_message)
 
 @rate_limit(seconds=2)
 async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -339,7 +345,8 @@ async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query:
         await query.answer()
-        page = int(query.data.split('_')[2])
+        if "books_page_" in query.data:
+            page = int(query.data.split('_')[2])
     
     context.user_data['current_books_page'] = page
     offset = page * books_per_page
@@ -411,24 +418,27 @@ def _build_book_details_content(conn, book_id, current_page=0):
 
     return {'text': message_text, 'reply_markup': reply_markup, 'cover_id': book.get('cover_image_id')}
 
-
 async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку книги."""
     query = update.callback_query
     await query.answer()
-    query_data = query.data.replace('_cancel', '')
-    book_id = int(query_data.split('_')[3])
+    book_id = int(query.data.split('_')[3])
     current_page = context.user_data.get('current_books_page', 0)
 
     try:
         with get_db_connection() as conn:
             content = _build_book_details_content(conn, book_id, current_page)
 
+        # Удаляем предыдущее сообщение, чтобы избежать дублей
+        if query.message.photo and not content.get('cover_id'):
+             await query.message.delete()
+        elif query.message.text and content.get('cover_id'):
+             await query.message.delete()
+
         if content.get('cover_id'):
             if query.message.photo:
                  await query.edit_message_caption(caption=content['text'], reply_markup=content['reply_markup'], parse_mode='Markdown')
             else:
-                await query.message.delete()
                 await context.bot.send_photo(
                     chat_id=query.message.chat_id,
                     photo=content['cover_id'],
@@ -444,13 +454,10 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         error_message = f"❌ Произошла ошибка при получении деталей книги: {e}"
         logger.error(error_message, exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
-        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `stats`\n**Ошибка:** `{e}`")
-        # Отвечаем пользователю
-        if query:
-            await query.edit_message_text(error_message)
-        else:
-            await update.message.reply_text(error_message)
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `show_book_details`\n**Ошибка:** `{e}`")
+        await query.edit_message_text(error_message)
+    
+    return ConversationHandler.END # Явный выход из диалога редактирования, если он был активен
 
 async def start_book_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог редактирования книги, показывая поля для выбора."""
@@ -464,10 +471,15 @@ async def start_book_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         [InlineKeyboardButton("Автор", callback_data=f"edit_field_author")],
         [InlineKeyboardButton("Жанр", callback_data=f"edit_field_genre")],
         [InlineKeyboardButton("Описание", callback_data=f"edit_field_description")],
-        [InlineKeyboardButton("⬅️ Отмена", callback_data=f"admin_view_book_{book_id}_cancel")],
+        [InlineKeyboardButton("⬅️ Отмена", callback_data=f"cancel_edit")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_caption(caption="✏️ Какое поле вы хотите отредактировать?", reply_markup=reply_markup)
+    
+    message_text = "✏️ Какое поле вы хотите отредактировать?"
+    if query.message.caption:
+        await query.edit_message_caption(caption=message_text, reply_markup=reply_markup)
+    else:
+        await query.edit_message_text(text=message_text, reply_markup=reply_markup)
     
     return SELECTING_BOOK_FIELD
 
@@ -479,22 +491,16 @@ async def prompt_for_update(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     field_to_edit = query.data.split('_')[2]
     context.user_data['field_to_edit'] = field_to_edit
     
-    field_map = {
-        'name': 'название',
-        'author': 'автора',
-        'genre': 'жанр',
-        'description': 'описание'
-    }
+    field_map = {'name': 'название', 'author': 'автора', 'genre': 'жанр', 'description': 'описание'}
     
-    book_id = context.user_data['book_to_edit']
-    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"admin_view_book_{book_id}_cancel")]]
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_edit")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_caption(
-        caption=f"Пришлите новое **{field_map[field_to_edit]}** для книги.",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
+    message_text = f"Пришлите новое **{field_map[field_to_edit]}** для книги."
+    if query.message.caption:
+        await query.edit_message_caption(caption=message_text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
     
     return UPDATING_BOOK_FIELD
 
@@ -516,6 +522,7 @@ async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE
         admin_text = f"✏️ Админ отредактировал поле `{field}` для книги «{book_name}»."
         tasks.notify_admin.delay(text=admin_text, category='admin_action')
 
+        await update.message.delete() # Удаляем сообщение с новым текстом
         await update.message.reply_text("✅ Информация о книге успешно обновлена!")
 
         if content.get('cover_id'):
@@ -544,6 +551,19 @@ async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     return ConversationHandler.END
 
+async def cancel_edit_and_show_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отменяет редактирование и возвращает карточку книги."""
+    query = update.callback_query
+    await query.answer()
+    book_id = context.user_data.get('book_to_edit')
+    if book_id:
+        query.data = f"admin_view_book_{book_id}"
+        await show_book_details(update, context)
+    else: # Если что-то пошло не так, просто отменяем
+        await cancel(update, context)
+
+    return ConversationHandler.END
+
 async def ask_for_book_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Запрашивает подтверждение на удаление книги."""
     query = update.callback_query
@@ -557,19 +577,18 @@ async def ask_for_book_delete_confirmation(update: Update, context: ContextTypes
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await query.edit_message_caption(
-        caption="**⚠️ Вы уверены, что хотите удалить эту книгу?**\n\nЭто действие необратимо и удалит всю связанную с ней историю.",
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
-    )
-
+    
+    message_text = "**⚠️ Вы уверены, что хотите удалить эту книгу?**\n\nЭто действие необратимо и удалит всю связанную с ней историю."
+    if query.message.caption:
+        await query.edit_message_caption(caption=message_text, reply_markup=reply_markup, parse_mode='Markdown')
+    else:
+        await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def process_book_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает удаление книги и возвращает к списку."""
     query = update.callback_query
     await query.answer()
-    book_id = int(query.data.split('_')[4]) # `confirm` добавляет 1 часть, поэтому индекс 4
+    book_id = int(query.data.split('_')[4])
     current_page = context.user_data.get('current_books_page', 0)
 
     try:
@@ -580,23 +599,30 @@ async def process_book_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         admin_text = f"🗑️ Админ удалил книгу «{book_name}» из каталога."
         tasks.notify_admin.delay(text=admin_text, category='admin_action')
-
-        await query.edit_message_caption(caption="✅ Книга успешно удалена из каталога.")
+        
+        # Сначала редактируем сообщение, затем показываем список
+        if query.message.caption:
+             await query.edit_message_caption(caption="✅ Книга успешно удалена из каталога.", reply_markup=None)
+        else:
+             await query.edit_message_text(text="✅ Книга успешно удалена из каталога.", reply_markup=None)
 
     except Exception as e:
-        await query.edit_message_caption(caption=f"❌ Ошибка при удалении книги: {e}")
+        error_message = f"❌ Ошибка при удалении книги: {e}"
         tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `process_book_delete`\n**Ошибка:** `{e}`")
+        if query.message.caption:
+            await query.edit_message_caption(caption=error_message)
+        else:
+            await query.edit_message_text(text=error_message)
 
     # Имитируем нажатие на кнопку "Назад", чтобы показать обновленный список книг
     query.data = f"books_page_{current_page}"
     await show_books_list(update, context)
 
 # --- Функции для диалога добавления книги ---
-
 async def add_book_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начинает диалог добавления новой книги."""
     query = update.callback_query
     await query.answer()
+    context.user_data['new_book'] = {}
     await query.edit_message_text(
         "**➕ Добавление новой книги**\n\n"
         "**Шаг 1/5: Введите название книги.**\n\n"
@@ -605,34 +631,21 @@ async def add_book_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return GET_NAME
 
 async def get_book_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает название книги и запрашивает автора."""
-    context.user_data['new_book'] = {'name': update.message.text}
-    await update.message.reply_text(
-        "**Шаг 2/5: Введите автора книги.**",
-        parse_mode='Markdown'
-    )
+    context.user_data['new_book']['name'] = update.message.text
+    await update.message.reply_text("**Шаг 2/5: Введите автора книги.**", parse_mode='Markdown')
     return GET_AUTHOR
 
 async def get_book_author(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает автора и запрашивает жанр."""
     context.user_data['new_book']['author'] = update.message.text
-    await update.message.reply_text(
-        "**Шаг 3/5: Введите жанр книги.**",
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text("**Шаг 3/5: Введите жанр книги.**", parse_mode='Markdown')
     return GET_GENRE
 
 async def get_book_genre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает жанр и запрашивает описание."""
     context.user_data['new_book']['genre'] = update.message.text
-    await update.message.reply_text(
-        "**Шаг 4/5: Введите краткое описание книги.**",
-        parse_mode='Markdown'
-    )
+    await update.message.reply_text("**Шаг 4/5: Введите краткое описание книги.**", parse_mode='Markdown')
     return GET_DESCRIPTION
 
 async def get_book_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает описание и запрашивает обложку."""
     context.user_data['new_book']['description'] = update.message.text
     await update.message.reply_text(
         "**Шаг 5/5: Отправьте фото обложки.**\n\n"
@@ -641,22 +654,18 @@ async def get_book_description(update: Update, context: ContextTypes.DEFAULT_TYP
     return GET_COVER
 
 async def get_book_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Получает фото обложки и переходит к подтверждению."""
     context.user_data['new_book']['cover_image_id'] = update.message.photo[-1].file_id
     await show_add_confirmation(update, context)
     return CONFIRM_ADD
 
 async def skip_cover(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Пропускает шаг добавления обложки."""
     context.user_data['new_book']['cover_image_id'] = None
     await update.message.reply_text("👌 Обложка пропущена.")
     await show_add_confirmation(update, context)
     return CONFIRM_ADD
 
 async def show_add_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает собранные данные для финального подтверждения."""
     book_data = context.user_data['new_book']
-    
     message_parts = [
         "**🔍 Проверьте данные перед сохранением:**\n",
         f"**Название:** {book_data['name']}",
@@ -665,24 +674,18 @@ async def show_add_confirmation(update: Update, context: ContextTypes.DEFAULT_TY
         f"**Описание:** {book_data['description']}"
     ]
     message_text = "\n".join(message_parts)
-
-    # --- ИЗМЕНЕНИЯ ЗДЕСЬ ---
     keyboard = [
-        [
-            InlineKeyboardButton("✅ Сохранить", callback_data="add_book_save_simple"),
-        ],
-        [
-            InlineKeyboardButton("🚀 Сохранить и уведомить всех", callback_data="add_book_save_notify"),
-        ],
-        [
-            InlineKeyboardButton("❌ Отмена", callback_data="add_book_cancel")
-        ]
+        [InlineKeyboardButton("✅ Сохранить", callback_data="add_book_save_simple")],
+        [InlineKeyboardButton("🚀 Сохранить и уведомить всех", callback_data="add_book_save_notify")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="add_book_cancel")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # ... остальная часть функции без изменений
     if book_data.get('cover_image_id'):
-        await update.message.reply_photo(
+        # Удаляем текстовые сообщения, чтобы не засорять чат
+        await update.message.delete()
+        await context.bot.send_photo(
+            chat_id=update.effective_chat.id,
             photo=book_data['cover_image_id'],
             caption=message_text,
             reply_markup=reply_markup,
@@ -696,37 +699,31 @@ async def show_add_confirmation(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
 async def add_book_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Сохраняет новую книгу в БД и опционально запускает рассылку."""
     query = update.callback_query
     await query.answer()
-    
-    # Определяем, нужно ли отправлять уведомление
     should_notify = "_notify" in query.data
-    
     book_data = context.user_data.pop('new_book', None)
 
     try:
         with get_db_connection() as conn:
-            # add_new_book возвращает ID новой книги, это нам понадобится
             new_book_id = db_data.add_new_book(conn, book_data)
         
-        if should_notify:
-            await query.edit_message_caption(caption="✅ Книга сохранена. Запускаю рассылку о новинке...", reply_markup=None)
-            # Вызываем новую задачу Celery
-            tasks.broadcast_new_book.delay(book_id=new_book_id)
+        message_end = " Запускаю рассылку о новинке..." if should_notify else ""
+        caption_text = f"✅ Новая книга успешно добавлена в каталог!{message_end}"
+
+        if query.message.caption:
+            await query.edit_message_caption(caption=caption_text, reply_markup=None, parse_mode='Markdown')
         else:
-            await query.edit_message_caption(caption="✅ Новая книга успешно добавлена в каталог!", reply_markup=None)
+            await query.edit_message_text(text=caption_text, reply_markup=None, parse_mode='Markdown')
+
+        if should_notify:
+            tasks.broadcast_new_book.delay(book_id=new_book_id)
 
     except Exception as e:
         error_message = f"❌ Ошибка при сохранении книги: {e}"
         logger.error(error_message, exc_info=True)
-        # --- ДОБАВЛЯЕМ УВЕДОМЛЕНИЕ ---
-        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `stats`\n**Ошибка:** `{e}`")
-        # Отвечаем пользователю
-        if query:
-            await query.edit_message_text(error_message)
-        else:
-            await update.message.reply_text(error_message)
+        tasks.notify_admin.delay(text=f"❗️ **Ошибка в `admin_bot`**\n\n**Функция:** `add_book_save`\n**Ошибка:** `{e}`")
+        await query.edit_message_text(error_message)
     
     return ConversationHandler.END
 
@@ -735,7 +732,15 @@ async def add_book_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     context.user_data.pop('new_book', None)
-    await query.edit_message_caption(caption="👌 Добавление книги отменено.", reply_markup=None)
+    
+    caption_text = "👌 Добавление книги отменено."
+    if query.message.caption:
+        await query.edit_message_caption(caption=caption_text, reply_markup=None)
+    else:
+        await query.edit_message_text(text=caption_text, reply_markup=None)
+        
+    # Показываем основной список книг
+    await show_books_list(update, context)
     return ConversationHandler.END
 
 # --------------------------
@@ -757,38 +762,28 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, skip_cover)
             ],
             CONFIRM_ADD: [
-            # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
                 CallbackQueryHandler(add_book_save, pattern="^add_book_save_"), 
                 CallbackQueryHandler(add_book_cancel, pattern="^add_book_cancel$")
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
-    application.add_handler(add_book_handler)
 
     edit_book_handler = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_book_edit, pattern="^admin_edit_book_")],
         states={
             SELECTING_BOOK_FIELD: [
                 CallbackQueryHandler(prompt_for_update, pattern="^edit_field_"),
+                CallbackQueryHandler(cancel_edit_and_show_card, pattern="^cancel_edit$"),
             ],
             UPDATING_BOOK_FIELD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_book_update)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_book_update),
+                CallbackQueryHandler(cancel_edit_and_show_card, pattern="^cancel_edit$"),
             ],
         },
-        fallbacks=[
-            # Обработчик для кнопки "Назад к карточке" и "Отмена"
-            CallbackQueryHandler(show_book_details, pattern="^admin_view_book_.*_cancel$"),
-            CommandHandler("cancel", cancel) # Общая команда отмены
-        ],
-        # Позволяет повторно входить в диалог по кнопке
-        map_to_parent={
-            ConversationHandler.END: -1 # Возвращаемся в "основное" состояние
-        }
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
     
-    application.add_handler(edit_book_handler)
-
     broadcast_handler = ConversationHandler(
         entry_points=[CommandHandler("broadcast", start_broadcast, filters=admin_filter)],
         states={
@@ -796,15 +791,27 @@ def main() -> None:
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
+
+    # Основные команды
     application.add_handler(CommandHandler("start", start, filters=admin_filter))
+    application.add_handler(CommandHandler("stats", show_stats_panel, filters=admin_filter))
+    application.add_handler(CommandHandler("books", show_books_list, filters=admin_filter))
+    
+    # Диалоги
     application.add_handler(broadcast_handler)
-    application.add_handler(CommandHandler("stats", stats, filters=admin_filter))
-    application.add_handler(CallbackQueryHandler(stats, pattern="^stats_page_"))
+    application.add_handler(add_book_handler)
+    application.add_handler(edit_book_handler)
+
+    # Обработчики CallbackQuery
+    # Статистика и пользователи
+    application.add_handler(CallbackQueryHandler(show_stats_panel, pattern="^back_to_stats_panel$"))
+    application.add_handler(CallbackQueryHandler(show_users_list, pattern="^users_list_page_"))
     application.add_handler(CallbackQueryHandler(view_user_profile, pattern="^admin_view_user_"))
     application.add_handler(CallbackQueryHandler(show_user_activity, pattern="^admin_activity_"))
     application.add_handler(CallbackQueryHandler(ask_for_delete_confirmation, pattern="^admin_delete_user_"))
     application.add_handler(CallbackQueryHandler(process_delete_confirmation, pattern="^admin_confirm_delete_"))
-    application.add_handler(CommandHandler("books", show_books_list, filters=admin_filter))
+    
+    # Книги
     application.add_handler(CallbackQueryHandler(show_books_list, pattern="^books_page_"))
     application.add_handler(CallbackQueryHandler(show_book_details, pattern="^admin_view_book_"))
     application.add_handler(CallbackQueryHandler(ask_for_book_delete_confirmation, pattern="^admin_delete_book_"))
