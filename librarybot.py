@@ -1414,6 +1414,9 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
     with get_db_connection() as conn:
         books, total_books = db_data.get_available_books_by_genre(conn, genre, limit=books_per_page, offset=offset)
 
+    # ✅ Инициализируем keyboard сразу
+    keyboard = []
+    
     if total_books == 0:
         message_text = f"😔 В жанре «{genre}» свободных книг не найдено."
     else:
@@ -1421,7 +1424,13 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
         for book in books:
             message_parts.append(f"• *{book['name']}* ({book['author']})")
         message_text = "\n".join(message_parts)
-    
+        
+        # Добавляем кнопки для книг
+        for i, book in enumerate(books, start=1):
+            status_icon = "✅" if book['is_available'] else "❌"
+            button_text = f"{status_icon} {book['name']} ({book['author']})"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"view_book_{book['id']}")])
+
     # --- Кнопки навигации ---
     nav_buttons = []
     if page > 0:
@@ -1429,7 +1438,9 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
     if (page + 1) * books_per_page < total_books:
         nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"genre_{genre}_{page + 1}"))
 
-    keyboard = [nav_buttons] if nav_buttons else []
+    if nav_buttons:  # ✅ Добавляем только если есть кнопки навигации
+        keyboard.append(nav_buttons)
+    
     keyboard.append([InlineKeyboardButton("⬅️ К выбору жанра", callback_data="find_by_genre")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -2134,6 +2145,8 @@ def main() -> None:
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
         SHOWING_GENRE_BOOKS: [
+            CallbackQueryHandler(show_books_in_genre, pattern=r"^genre_"),
+            CallbackQueryHandler(show_book_card_user, pattern="^view_book_"),
             CallbackQueryHandler(show_genres, pattern="^find_by_genre$"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
