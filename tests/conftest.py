@@ -4,11 +4,8 @@ import os
 import psycopg2
 from psycopg2 import pool
 from dotenv import load_dotenv
-import sys
-
-# Добавляем корневую директорию в путь, чтобы можно было импортировать init_db
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from init_db import SCHEMA_COMMANDS # <-- ИМПОРТИРУЕМ НАШУ СХЕМУ НАПРЯМУЮ
+# Импортируем схему из ее нового местоположения в src
+from src.init_db import SCHEMA_COMMANDS
 
 # Загружаем переменные из .env.test
 load_dotenv(dotenv_path='.env.test')

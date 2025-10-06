@@ -1,14 +1,10 @@
 # tests/test_db_data.py
 import pytest
-import sys
-import os
 import datetime
 
-# Добавляем корневую директорию в путь, чтобы можно было импортировать db_data
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-import db_data
-from db_data import UserExistsError, NotFoundError
+# Импортируем модули из пакета src
+from src import db_data
+from src.db_data import UserExistsError, NotFoundError
 
 # Данные для тестового пользователя
 USER_DATA = {

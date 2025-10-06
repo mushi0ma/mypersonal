@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
-from db_utils import hash_password, get_db_connection
+from src.db_utils import hash_password, get_db_connection
 from datetime import datetime
 import psycopg2
 import uuid
