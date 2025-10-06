@@ -1861,6 +1861,33 @@ async def show_recommendations(update: Update, context: ContextTypes.DEFAULT_TYP
         parse_mode='Markdown'
     )
 
+async def export_user_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Экспортирует данные пользователя в JSON (GDPR compliance)."""
+    user_id = context.user_data['current_user']['id']
+    
+    with get_db_connection() as conn:
+        user_profile = db_data.get_user_profile(conn, user_id)
+        borrow_history = db_data.get_user_borrow_history(conn, user_id)
+        ratings = db_data.get_user_ratings(conn, user_id)
+        activity = db_data.get_user_activity(conn, user_id, limit=1000, offset=0)[0]
+    
+    export_data = {
+        'profile': user_profile,
+        'borrow_history': borrow_history,
+        'ratings': ratings,
+        'activity_log': activity
+    }
+    
+    import json
+    json_data = json.dumps(export_data, indent=2, default=str, ensure_ascii=False)
+    
+    # Отправляем как файл
+    await update.message.reply_document(
+        document=json_data.encode('utf-8'),
+        filename=f"user_data_{user_id}.json",
+        caption="📄 Ваши данные из системы библиотеки"
+    )
+
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---
 # --------------------------
@@ -2005,9 +2032,9 @@ def main() -> None:
             CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
         SHOWING_AUTHORS_LIST: [
-        CallbackQueryHandler(show_author_card, pattern=r"^view_author_"),
-        CallbackQueryHandler(show_authors_list, pattern="^authors_page_"),
-        CallbackQueryHandler(user_menu, pattern="^user_menu$")
+            CallbackQueryHandler(show_author_card, pattern=r"^view_author_"),
+            CallbackQueryHandler(show_authors_list, pattern="^authors_page_"),
+            CallbackQueryHandler(user_menu, pattern="^user_menu$")
         ],
         VIEWING_AUTHOR_CARD: [
             CallbackQueryHandler(show_author_card, pattern=r"^view_author_"),
@@ -2015,6 +2042,11 @@ def main() -> None:
             CallbackQueryHandler(show_authors_list, pattern="^authors_page_"),
             CallbackQueryHandler(user_menu, pattern="^user_menu$"),
             CallbackQueryHandler(ignore_callback, pattern="^ignore$"),
+        ],
+        SEARCHING_AUTHORS: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, process_author_search),
+            CallbackQueryHandler(show_authors_list, pattern='^show_authors$'),
+            CallbackQueryHandler(user_menu, pattern='^user_menu$'),
         ],
     }
 

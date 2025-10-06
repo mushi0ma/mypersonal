@@ -8,6 +8,7 @@ import telegram
 import db_data
 from db_utils import get_db_connection
 from datetime import datetime
+from backup_db import backup_database
 # Загружаем переменные окружения и настраиваем логгер
 load_dotenv()
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -182,6 +183,11 @@ def remind_due_soon():
             button_callback=f"extend_borrow_{user_info['borrow_id']}"
         )
 
+@celery_app.task
+def backup_database_task():
+    """Celery задача для backup базы данных."""
+    return backup_database()
+
 # --- Расписание для периодических задач (Celery Beat) ---
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
@@ -191,5 +197,9 @@ celery_app.conf.beat_schedule = {
     'check-overdue-books': {
         'task': 'tasks.check_overdue_books',
         'schedule': crontab(hour=10, minute=0),  # Каждый день в 10:00
+    },
+    'daily-database-backup': {
+        'task': 'celery_tasks.backup_database_task',
+        'schedule': crontab(hour=3, minute=0),  # Каждый день в 3:00
     },
 }
