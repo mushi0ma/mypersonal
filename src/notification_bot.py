@@ -6,9 +6,9 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # --- Импорты для работы с БД и задачами ---
-import db_data
-from db_utils import get_db_connection
-import tasks # <-- ДОБАВЛЕН ИМПОРТ
+from src import db_data
+from src.db_utils import get_db_connection
+from src import tasks
 
 # Загрузка переменных окружения и настройка
 load_dotenv()

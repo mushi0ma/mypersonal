@@ -1,18 +1,13 @@
 # tests/test_admin_bot_integration.py
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 from contextlib import contextmanager
-import sys
-import os
 
-# Добавляем корневую директорию в путь
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Мокируем модуль tasks перед импортом admin_bot
+with patch.dict('sys.modules', {'src.tasks': MagicMock()}):
+    from src import admin_bot
+    from src import db_data
 
-# Мокируем внешние зависимости, которые не нужны для этих тестов
-sys.modules['tasks'] = MagicMock()
-
-import admin_bot
-import db_data
 from telegram import Update, User, Message, Chat, CallbackQuery
 from telegram.ext import ContextTypes, ConversationHandler
 

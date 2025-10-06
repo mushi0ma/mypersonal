@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
-from librarybot import rate_limit
+from src.library_bot.utils import rate_limit
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
@@ -24,9 +24,9 @@ ADMIN_BOT_TOKEN = os.getenv("ADMIN_BOT_TOKEN")
 ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
 
 # --- Импорт наших модулей ---
-import db_data
-from db_utils import get_db_connection # Импортируем функцию для получения соединения
-import tasks
+from src import db_data
+from src.db_utils import get_db_connection
+from src import tasks
 
 # --- Состояния для диалогов ---
 BROADCAST_MESSAGE = range(1)

@@ -5,10 +5,10 @@ from celery import Celery
 from celery.schedules import crontab
 from dotenv import load_dotenv
 import telegram
-import db_data
-from db_utils import get_db_connection
+from src import db_data
+from src.db_utils import get_db_connection
 from datetime import datetime
-from backup_db import backup_database
+from src.backup_db import backup_database
 from celery import group
 from celery.exceptions import SoftTimeLimitExceeded
 # Загружаем переменные окружения и настраиваем логгер
@@ -182,71 +182,33 @@ def check_due_dates_and_notify():
         notify_admin(text=error_message, category='error')
 
 @celery_app.task
-def check_overdue_books():
-    """Проверяет просроченные книги и отправляет напоминания."""
-    with get_db_connection() as conn:
-        overdue_users = db_data.get_users_with_overdue_books(conn)
-    
-    for user_info in overdue_users:
-        days_overdue = (datetime.now().date() - user_info['due_date']).days
-        message = (
-            f"⚠️ **Напоминание о возврате**\n\n"
-            f"Книга «{user_info['book_name']}» просрочена на **{days_overdue} дн.**\n\n"
-            f"Пожалуйста, верните её как можно скорее."
-        )
-        notify_user.delay(user_id=user_info['user_id'], text=message, category='overdue')
-
-@celery_app.task
-def remind_due_soon():
-    """Напоминает о скором истечении срока возврата."""
-    with get_db_connection() as conn:
-        users_due_soon = db_data.get_users_with_books_due_soon(conn, days_ahead=2)
-    
-    for user_info in users_due_soon:
-        message = (
-            f"📅 **Напоминание**\n\n"
-            f"Через 2 дня истекает срок возврата книги «{user_info['book_name']}».\n\n"
-            f"Дата возврата: **{user_info['due_date'].strftime('%d.%m.%Y')}**"
-        )
-        # Добавляем кнопку продления
-        notify_user.delay(
-            user_id=user_info['user_id'], 
-            text=message, 
-            category='reminder',
-            button_text="⏰ Продлить срок",
-            button_callback=f"extend_borrow_{user_info['borrow_id']}"
-        )
-
-@celery_app.task
 def backup_database_task():
     """Celery задача для backup базы данных."""
+    from src.backup_db import backup_database
     return backup_database()
 
 @celery_app.task
 def health_check_task():
     """Периодическая проверка здоровья системы."""
-    from health_check import run_health_check
+    from src.health_check import run_health_check
     all_ok, message = run_health_check()
     if not all_ok:
-        logger.error("Health check failed!")
+        logger.error(f"Health check failed! Reason: {message}")
+        notify_admin.delay(text=f"🌡️ **Health Check FAILED**\n\n`{message}`")
     return all_ok
 
 # --- Расписание для периодических задач (Celery Beat) ---
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
-        'task': 'tasks.check_due_dates_and_notify',
-        'schedule': crontab(hour=10, minute=0),
-    },
-    'check-overdue-books': {
-        'task': 'tasks.check_overdue_books',
-        'schedule': crontab(hour=10, minute=0),  # Каждый день в 10:00
+        'task': 'src.tasks.check_due_dates_and_notify',
+        'schedule': crontab(hour=10, minute=0), # Каждый день в 10:00
     },
     'daily-database-backup': {
-        'task': 'celery_tasks.backup_database_task',
+        'task': 'src.tasks.backup_database_task',
         'schedule': crontab(hour=3, minute=0),  # Каждый день в 3:00
     },
     'health-check-every-hour': {
-    'task': 'tasks.health_check_task',
-    'schedule': crontab(minute=0),  # Каждый час
+        'task': 'src.tasks.health_check_task',
+        'schedule': crontab(minute=0),  # Каждый час
     },
 }

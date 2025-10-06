@@ -26,9 +26,11 @@ services:
   library_bot:
     build: .
     restart: always
-    command: python librarybot.py
+    command: python src/librarybot.py
     volumes:
       - .:/app
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
@@ -41,9 +43,11 @@ services:
   admin_bot:
     build: .
     restart: always
-    command: python admin_bot.py
+    command: python src/admin_bot.py
     volumes:
       - .:/app
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
@@ -56,9 +60,11 @@ services:
   notification_bot:
     build: .
     restart: always
-    command: python notification_bot.py
+    command: python src/notification_bot.py
     volumes:
       - .:/app
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
@@ -69,9 +75,11 @@ services:
   audit_bot:
     build: .
     restart: always
-    command: python audit_bot.py # Новый файл, который мы создадим
+    command: python src/audit_bot.py
     volumes:
       - .:/app
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
@@ -82,9 +90,11 @@ services:
   celery_worker:
     build: .
     restart: always
-    command: celery -A tasks.celery_app worker --loglevel=info
+    command: celery -A src.tasks.celery_app worker --loglevel=info
     volumes:
       - .:/app
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
@@ -95,9 +105,11 @@ services:
   celery_beat:
     build: .
     restart: always
-    command: celery -A tasks.celery_app beat --loglevel=info
+    command: celery -A src.tasks.celery_app beat --loglevel=info
     volumes:
       - .:/app
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
