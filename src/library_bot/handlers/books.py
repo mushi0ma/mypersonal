@@ -365,30 +365,51 @@ async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     await query.edit_message_text("📚 Выберите интересующий вас жанр:", reply_markup=InlineKeyboardMarkup(keyboard))
     return State.SHOWING_GENRES
 
-async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Показывает книги в выбранном жанре."""
+async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Показывает постраничный список доступных книг в выбранном жанре."""
     query = update.callback_query
     await query.answer()
+
     parts = query.data.split('_')
     genre = parts[1]
     page = int(parts[2]) if len(parts) > 2 else 0
+    books_per_page = 5
+    offset = page * books_per_page
 
     with get_db_connection() as conn:
-        books, total = db_data.get_available_books_by_genre(conn, genre, limit=5, offset=page * 5)
+        books, total_books = db_data.get_available_books_by_genre(conn, genre, limit=books_per_page, offset=offset)
 
-    if total == 0:
-        await query.edit_message_text(f"😔 В жанре «{genre}» свободных книг не найдено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ К выбору жанра", callback_data="find_by_genre")]]))
-        return State.SHOWING_GENRE_BOOKS
+    # ✅ Инициализируем keyboard сразу
+    keyboard = []
 
-    message_text = f"**📚 Книги в жанре «{genre}»** (Стр. {page + 1}):\n" + "\n".join([f"• *{b['name']}* ({b['author']})" for b in books])
+    if total_books == 0:
+        message_text = f"😔 В жанре «{genre}» свободных книг не найдено."
+    else:
+        message_parts = [f"**📚 Книги в жанре «{genre}»** (Стр. {page + 1}):\n"]
+        for book in books:
+            message_parts.append(f"• *{book['name']}* ({book['author']})")
+        message_text = "\n".join(message_parts)
 
-    nav = []
-    if page > 0: nav.append(InlineKeyboardButton("⬅️", callback_data=f"genre_{genre}_{page - 1}"))
-    if (page + 1) * 5 < total: nav.append(InlineKeyboardButton("➡️", callback_data=f"genre_{genre}_{page + 1}"))
+        # Добавляем кнопки для книг
+        for i, book in enumerate(books, start=1):
+            status_icon = "✅" # В этой функции мы ищем только доступные книги
+            button_text = f"{status_icon} {book['name']} ({book['author']})"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"view_book_{book['id']}")])
 
-    keyboard = [nav] if nav else []
+    # --- Кнопки навигации ---
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"genre_{genre}_{page - 1}"))
+    if (page + 1) * books_per_page < total_books:
+        nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"genre_{genre}_{page + 1}"))
+
+    if nav_buttons:  # ✅ Добавляем только если есть кнопки навигации
+        keyboard.append(nav_buttons)
+
     keyboard.append([InlineKeyboardButton("⬅️ К выбору жанра", callback_data="find_by_genre")])
-    await query.edit_message_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
     return State.SHOWING_GENRE_BOOKS
 
 @rate_limit(seconds=2)

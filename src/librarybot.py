@@ -116,7 +116,9 @@ def main() -> None:
             ],
             State.SHOWING_GENRE_BOOKS: [
                 CallbackQueryHandler(books.show_books_in_genre, pattern=r"^genre_"),
+                CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.show_genres, pattern="^find_by_genre$"),
+                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
             State.SHOWING_AUTHORS_LIST: [
                 CallbackQueryHandler(books.show_author_card, pattern=r"^view_author_"),
