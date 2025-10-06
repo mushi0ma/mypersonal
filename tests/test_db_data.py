@@ -2,9 +2,9 @@
 import pytest
 import datetime
 
-# Импортируем модули из пакета src
-from src import db_data
-from src.db_data import UserExistsError, NotFoundError
+# Импортируем модули из нового пакета core
+from src.core.db import data_access as db_data
+from src.core.db.data_access import UserExistsError, NotFoundError
 
 # Данные для тестового пользователя
 USER_DATA = {

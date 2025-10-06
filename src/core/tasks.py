@@ -5,46 +5,46 @@ from celery import Celery
 from celery.schedules import crontab
 from dotenv import load_dotenv
 import telegram
-from src import db_data
-from src.db_utils import get_db_connection
+from src.core.db import data_access as db_data
+from src.core.db.utils import get_db_connection
 from datetime import datetime
 from src.backup_db import backup_database
 from celery import group
 from celery.exceptions import SoftTimeLimitExceeded
 # Загружаем переменные окружения и настраиваем логгер
-load_dotenv()
+from src.core import config
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Настройка Celery ---
 celery_app = Celery(
     'tasks',
-    broker=os.getenv("CELERY_BROKER_URL"),
-    backend=os.getenv("CELERY_RESULT_BACKEND")
+    broker=config.CELERY_BROKER_URL,
+    backend=config.CELERY_RESULT_BACKEND
 )
 
 celery_app.conf.task_annotations = {
-    'tasks.notify_user': {
-        'rate_limit': '10/s',  # 10 задач в секунду
-        'time_limit': 30,      # Максимум 30 секунд на задачу
+    'src.core.tasks.notify_user': {
+        'rate_limit': '10/s',
+        'time_limit': 30,
     },
-    'tasks.broadcast_new_book': {
-        'rate_limit': '1/m',   # 1 раз в минуту
+    'src.core.tasks.broadcast_new_book': {
+        'rate_limit': '1/m',
         'time_limit': 600,
     },
 }
 
 # --- ИНИЦИАЛИЗАЦИЯ ДВУХ БОТОВ ---
 try:
-    user_notifier_bot = telegram.Bot(token=os.getenv("NOTIFICATION_BOT_TOKEN"))
+    user_notifier_bot = telegram.Bot(token=config.NOTIFICATION_BOT_TOKEN)
     logger.info("API бота-уведомителя для ПОЛЬЗОВАТЕЛЕЙ инициализировано.")
 except Exception as e:
     logger.error(f"Не удалось инициализировать API бота-уведомителя для пользователей: {e}")
     user_notifier_bot = None
 
 try:
-    admin_notifier_bot = telegram.Bot(token=os.getenv("ADMIN_NOTIFICATION_BOT_TOKEN"))
-    ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID"))
+    admin_notifier_bot = telegram.Bot(token=config.ADMIN_NOTIFICATION_BOT_TOKEN)
+    ADMIN_TELEGRAM_ID = config.ADMIN_TELEGRAM_ID
     logger.info("API бота-аудитора для АДМИНА инициализировано.")
 except Exception as e:
     logger.error(f"Не удалось инициализировать API бота-аудитора для админа: {e}")
@@ -200,15 +200,15 @@ def health_check_task():
 # --- Расписание для периодических задач (Celery Beat) ---
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
-        'task': 'src.tasks.check_due_dates_and_notify',
+        'task': 'src.core.tasks.check_due_dates_and_notify',
         'schedule': crontab(hour=10, minute=0), # Каждый день в 10:00
     },
     'daily-database-backup': {
-        'task': 'src.tasks.backup_database_task',
+        'task': 'src.core.tasks.backup_database_task',
         'schedule': crontab(hour=3, minute=0),  # Каждый день в 3:00
     },
     'health-check-every-hour': {
-        'task': 'src.tasks.health_check_task',
+        'task': 'src.core.tasks.health_check_task',
         'schedule': crontab(minute=0),  # Каждый час
     },
 }

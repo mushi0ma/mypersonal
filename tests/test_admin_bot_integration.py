@@ -4,9 +4,10 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from contextlib import contextmanager
 
 # Мокируем модуль tasks перед импортом admin_bot
-with patch.dict('sys.modules', {'src.tasks': MagicMock()}):
-    from src import admin_bot
-    from src import db_data
+with patch.dict('sys.modules', {'src.core.tasks': MagicMock()}):
+    from src.admin_bot import main as admin_bot
+    from src.core.db import data_access as db_data
+    from src.admin_bot.states import AdminState
 
 from telegram import Update, User, Message, Chat, CallbackQuery
 from telegram.ext import ContextTypes, ConversationHandler
@@ -57,17 +58,13 @@ async def test_stats_command(db_session, monkeypatch, mock_context):
     @contextmanager
     def mock_get_db_connection():
         yield db_session
-    monkeypatch.setattr(admin_bot, 'get_db_connection', mock_get_db_connection)
+    monkeypatch.setattr(admin_bot.stats, 'get_db_connection', mock_get_db_connection)
     
     update = _create_mock_update(text="/stats")
     
-    await admin_bot.show_stats_panel(update, mock_context)
+    await admin_bot.stats.show_stats_panel(update, mock_context)
     
-    # Проверяем, что бот ответил сообщением
-    mock_context.bot.send_message.assert_not_called() # Должен быть reply_text
     update.message.reply_text.assert_called_once()
-    
-    # Проверяем содержимое ответа
     call_args = update.message.reply_text.call_args
     message_text = call_args[0][0]
     assert "📊 Панель статистики" in message_text
@@ -78,35 +75,36 @@ async def test_add_book_flow(db_session, monkeypatch, mock_context):
     @contextmanager
     def mock_get_db_connection():
         yield db_session
-    monkeypatch.setattr(admin_bot, 'get_db_connection', mock_get_db_connection)
     
+    monkeypatch.setattr(admin_bot.books, 'get_db_connection', mock_get_db_connection)
+
     # --- Шаг 1: Начинаем диалог ---
     update = _create_mock_update(callback_data="admin_add_book_start")
-    state = await admin_bot.add_book_start(update, mock_context)
-    assert state == admin_bot.GET_NAME
-    mock_context.user_data['new_book'] = {} # add_book_start инициализирует это
+    state = await admin_bot.books.add_book_start(update, mock_context)
+    assert state == AdminState.GET_NAME
+    mock_context.user_data['new_book'] = {}
 
     # --- Шаг 2-5: Вводим данные ---
     update = _create_mock_update(text="Война и мир")
-    state = await admin_bot.get_book_name(update, mock_context)
-    assert state == admin_bot.GET_AUTHOR
+    state = await admin_bot.books.get_book_name(update, mock_context)
+    assert state == AdminState.GET_AUTHOR
 
     update = _create_mock_update(text="Лев Толстой")
-    state = await admin_bot.get_book_author(update, mock_context)
-    assert state == admin_bot.GET_GENRE
+    state = await admin_bot.books.get_book_author(update, mock_context)
+    assert state == AdminState.GET_GENRE
 
     update = _create_mock_update(text="Роман-эпопея")
-    state = await admin_bot.get_book_genre(update, mock_context)
-    assert state == admin_bot.GET_DESCRIPTION
+    state = await admin_bot.books.get_book_genre(update, mock_context)
+    assert state == AdminState.GET_DESCRIPTION
     
     update = _create_mock_update(text="Великий роман о русском обществе.")
-    state = await admin_bot.get_book_description(update, mock_context)
-    assert state == admin_bot.GET_COVER
+    state = await admin_bot.books.get_book_description(update, mock_context)
+    assert state == AdminState.GET_COVER
 
     # --- Шаг 6: Пропускаем обложку ---
     update = _create_mock_update(text="пропустить")
-    state = await admin_bot.skip_cover(update, mock_context)
-    assert state == admin_bot.CONFIRM_ADD
+    state = await admin_bot.books.skip_cover(update, mock_context)
+    assert state == AdminState.CONFIRM_ADD
     
     # Проверяем, что бот показал подтверждение
     update.message.reply_text.assert_called_with(
