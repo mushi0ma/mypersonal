@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+from logging.handlers import RotatingFileHandler
 import uuid
 import os
 import random
@@ -37,6 +38,10 @@ load_dotenv()
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+handler = RotatingFileHandler('librarybot.log', maxBytes=10485760, backupCount=5)
+handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(handler)
+
 # --- Загрузка конфигурации из .env ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 NOTIFICATION_BOT_TOKEN = os.getenv("NOTIFICATION_BOT_TOKEN")  # ✅ ДОБАВЛЕНО
@@ -66,12 +71,12 @@ notification_bot = Bot(token=NOTIFICATION_BOT_TOKEN)
     EDITING_PASSWORD_CURRENT, EDITING_PASSWORD_NEW, EDITING_PASSWORD_CONFIRM,
     AWAITING_NOTIFICATION_BOT,
     AWAIT_CONTACT_VERIFICATION_CODE,
-    VIEWING_TOP_BOOKS, SHOWING_AUTHORS_LIST, VIEWING_AUTHOR_CARD
-) = range(39)
+    VIEWING_TOP_BOOKS, SHOWING_AUTHORS_LIST, VIEWING_AUTHOR_CARD, 
+    SEARCHING_AUTHORS
+) = range(40)
 
 user_last_request = {}
 user_violations = defaultdict(int)
-
 
 
 # --------------------------
@@ -169,6 +174,7 @@ def normalize_phone_number(contact: str) -> str:
 def get_user_borrow_limit(status):
     return {'студент': 3, 'учитель': 5}.get(status.lower(), 0)
 
+@rate_limit(seconds=10, alert_admins=True)
 async def send_verification_message(contact_info: str, code: str, context: ContextTypes.DEFAULT_TYPE, telegram_id: int):
     """
     Отправляет код верификации:
@@ -823,6 +829,7 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # --- ФУНКЦИИ РАБОТЫ С КНИГАМИ ---
 
+@rate_limit(seconds=3)
 async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -927,6 +934,7 @@ async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.edit_message_text(message_text, reply_markup=reply_markup)
     return USER_RETURN_BOOK
 
+@rate_limit(seconds=3)
 async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
@@ -1272,6 +1280,7 @@ async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEF
     context.user_data['just_edited_profile'] = True
     return ConversationHandler.END
 
+@rate_limit(seconds=1)
 async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Показывает пользователю список жанров и переходит в состояние выбора."""
     query = update.callback_query
@@ -1334,6 +1343,7 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
     return SHOWING_GENRE_BOOKS
 
+@rate_limit(seconds=1)
 async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начинает диалог поиска книги по ключевому слову."""
     query = update.callback_query
@@ -1713,6 +1723,143 @@ async def show_author_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         tasks.notify_admin.delay(text=f"❗️ **Ошибка в `librarybot`**\n\n**Функция:** `show_author_card`\n**Ошибка:** `{e}`")
         await query.edit_message_text(error_message)
         return USER_MENU
+
+async def search_authors(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Поиск авторов по имени."""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "🔎 Введите имя автора для поиска:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⬅️ Назад", callback_data="show_authors")
+        ]])
+    )
+    return SEARCHING_AUTHORS
+
+async def process_author_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает поиск автора."""
+    search_term = update.message.text
+    
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT a.id, a.name, COUNT(b.id) as books_count
+            FROM authors a
+            LEFT JOIN books b ON a.id = b.author_id
+            WHERE a.name ILIKE %s
+            GROUP BY a.id
+            HAVING COUNT(b.id) > 0
+            ORDER BY a.name
+            LIMIT 10
+            """,
+            (f'%{search_term}%',)
+        )
+        results = cur.fetchall()
+    
+    if not results:
+        await update.message.reply_text(
+            f"😔 По запросу «{search_term}» ничего не найдено.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔎 Искать снова", callback_data="search_authors"),
+                InlineKeyboardButton("⬅️ К списку", callback_data="show_authors")
+            ]])
+        )
+        return SHOWING_AUTHORS_LIST
+    
+    keyboard = []
+    for author_id, name, books_count in results:
+        keyboard.append([
+            InlineKeyboardButton(
+                f"✍️ {name} ({books_count} книг)", 
+                callback_data=f"view_author_{author_id}_0"
+            )
+        ])
+    
+    keyboard.append([
+        InlineKeyboardButton("🔎 Искать снова", callback_data="search_authors"),
+        InlineKeyboardButton("⬅️ К списку", callback_data="show_authors")
+    ])
+    
+    await update.message.reply_text(
+        f"🔎 Результаты по запросу «{search_term}»:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return SHOWING_AUTHORS_LIST
+
+def get_book_recommendations(conn, user_id: int, limit: int = 5):
+    """
+    Рекомендует книги на основе:
+    1. Жанров, которые пользователь читал
+    2. Рейтингов, которые он ставил
+    3. Популярности книг
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH user_genres AS (
+                SELECT DISTINCT b.genre
+                FROM borrowed_books bb
+                JOIN books b ON bb.book_id = b.id
+                WHERE bb.user_id = %s
+            ),
+            user_read_books AS (
+                SELECT book_id FROM borrowed_books WHERE user_id = %s
+            )
+            SELECT 
+                b.id, b.name, a.name as author,
+                AVG(r.rating) as avg_rating,
+                COUNT(bb.borrow_id) as popularity
+            FROM books b
+            JOIN authors a ON b.author_id = a.id
+            LEFT JOIN ratings r ON b.id = r.book_id
+            LEFT JOIN borrowed_books bb ON b.id = bb.book_id
+            WHERE b.genre IN (SELECT genre FROM user_genres)
+              AND b.id NOT IN (SELECT book_id FROM user_read_books)
+              AND NOT EXISTS (
+                  SELECT 1 FROM borrowed_books bb2 
+                  WHERE bb2.book_id = b.id AND bb2.return_date IS NULL
+              )
+            GROUP BY b.id, a.name
+            ORDER BY avg_rating DESC NULLS LAST, popularity DESC
+            LIMIT %s
+            """,
+            (user_id, user_id, limit)
+        )
+        return cur.fetchall()
+
+async def show_recommendations(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает персональные рекомендации."""
+    user_id = context.user_data['current_user']['id']
+    
+    with get_db_connection() as conn:
+        recommendations = get_book_recommendations(conn, user_id)
+    
+    if not recommendations:
+        await update.callback_query.edit_message_text(
+            "🤷 К сожалению, пока нет рекомендаций. Попробуйте взять несколько книг!"
+        )
+        return
+    
+    message_parts = ["💡 **Рекомендуем вам:**\n"]
+    keyboard = []
+    
+    for i, (book_id, title, author, rating, popularity) in enumerate(recommendations, 1):
+        rating_str = f"⭐ {rating:.1f}" if rating else "Нет оценок"
+        message_parts.append(f"{i}. **{title}** - {author} | {rating_str}")
+        keyboard.append([
+            InlineKeyboardButton(f"📖 {i}", callback_data=f"view_book_{book_id}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ В меню", callback_data="user_menu")])
+    
+    await update.callback_query.edit_message_text(
+        "\n".join(message_parts),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
 
 # --------------------------
 # --- ГЛАВНЫЙ HANDLER ---

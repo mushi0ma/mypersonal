@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 import telegram
 import db_data
 from db_utils import get_db_connection
-
+from datetime import datetime
 # Загружаем переменные окружения и настраиваем логгер
 load_dotenv()
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -146,10 +146,50 @@ def check_due_dates_and_notify():
         logger.error(error_message)
         notify_admin(text=error_message, category='error')
 
+@celery_app.task
+def check_overdue_books():
+    """Проверяет просроченные книги и отправляет напоминания."""
+    with get_db_connection() as conn:
+        overdue_users = db_data.get_users_with_overdue_books(conn)
+    
+    for user_info in overdue_users:
+        days_overdue = (datetime.now().date() - user_info['due_date']).days
+        message = (
+            f"⚠️ **Напоминание о возврате**\n\n"
+            f"Книга «{user_info['book_name']}» просрочена на **{days_overdue} дн.**\n\n"
+            f"Пожалуйста, верните её как можно скорее."
+        )
+        notify_user.delay(user_id=user_info['user_id'], text=message, category='overdue')
+
+@celery_app.task
+def remind_due_soon():
+    """Напоминает о скором истечении срока возврата."""
+    with get_db_connection() as conn:
+        users_due_soon = db_data.get_users_with_books_due_soon(conn, days_ahead=2)
+    
+    for user_info in users_due_soon:
+        message = (
+            f"📅 **Напоминание**\n\n"
+            f"Через 2 дня истекает срок возврата книги «{user_info['book_name']}».\n\n"
+            f"Дата возврата: **{user_info['due_date'].strftime('%d.%m.%Y')}**"
+        )
+        # Добавляем кнопку продления
+        notify_user.delay(
+            user_id=user_info['user_id'], 
+            text=message, 
+            category='reminder',
+            button_text="⏰ Продлить срок",
+            button_callback=f"extend_borrow_{user_info['borrow_id']}"
+        )
+
 # --- Расписание для периодических задач (Celery Beat) ---
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
         'task': 'tasks.check_due_dates_and_notify',
         'schedule': crontab(hour=10, minute=0),
+    },
+    'check-overdue-books': {
+        'task': 'tasks.check_overdue_books',
+        'schedule': crontab(hour=10, minute=0),  # Каждый день в 10:00
     },
 }

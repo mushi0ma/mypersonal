@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+from librarybot import rate_limit
 import logging
 from datetime import datetime
 from dotenv import load_dotenv
@@ -139,6 +140,41 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(error_message)
         else:
             await update.message.reply_text(error_message)
+
+async def show_statistics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает общую статистику системы."""
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+        
+        # Общие метрики
+        cur.execute("SELECT COUNT(*) FROM users WHERE telegram_id IS NOT NULL")
+        total_users = cur.fetchone()[0]
+        
+        cur.execute("SELECT COUNT(*) FROM books")
+        total_books = cur.fetchone()[0]
+        
+        cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date IS NULL")
+        currently_borrowed = cur.fetchone()[0]
+        
+        cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date < due_date")
+        on_time_returns = cur.fetchone()[0]
+        
+        cur.execute("SELECT COUNT(*) FROM borrowed_books")
+        total_borrows = cur.fetchone()[0]
+        
+        on_time_rate = (on_time_returns / total_borrows * 100) if total_borrows > 0 else 0
+    
+    message = (
+        f"📊 **Статистика системы**\n\n"
+        f"👥 Активных пользователей: **{total_users}**\n"
+        f"📚 Книг в каталоге: **{total_books}**\n"
+        f"📖 Книг на руках: **{currently_borrowed}**\n"
+        f"✅ Книг доступно: **{total_books - currently_borrowed}**\n\n"
+        f"📈 Возврат вовремя: **{on_time_rate:.1f}%**\n"
+        f"📊 Всего выдач: **{total_borrows}**"
+    )
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
 
 async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку пользователя."""
@@ -294,7 +330,7 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             await update.message.reply_text(error_message)
 
-
+@rate_limit(seconds=2)
 async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает постраничный список всех книг."""
     query = update.callback_query
