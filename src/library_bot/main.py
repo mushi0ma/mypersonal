@@ -1,4 +1,5 @@
 # src/librarybot.py
+import asyncio
 import logging
 from logging.handlers import RotatingFileHandler
 from telegram.ext import (
@@ -139,7 +140,12 @@ def main() -> None:
 
     application.add_handler(conv_handler)
     logger.info("Основной бот запущен...")
-    application.run_polling()
+    application.initialize()
+    application.start()
+    application.updater.start_polling()
+    
+    # Держим бота запущенным
+    asyncio.Event().wait()
 
 
 if __name__ == "__main__":

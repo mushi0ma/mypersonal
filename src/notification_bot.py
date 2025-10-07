@@ -3,7 +3,7 @@
 Бот-уведомитель для отправки сообщений пользователям.
 Обрабатывает подписки через deep links.
 """
-
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import (
@@ -17,7 +17,7 @@ from src.core.db import data_access as db_data
 from src.core.db.utils import get_db_connection
 from src.core import tasks
 
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -135,7 +135,12 @@ def main() -> None:
     "Используйте src/main.py для запуска всех ботов."
     )
     application = setup_notification_bot()
-    application.run_polling()
+    application.initialize()
+    application.start()
+    application.updater.start_polling()
+    
+    # Держим бота запущенным
+    asyncio.Event().wait()
 
 if __name__ == "main":
     main()

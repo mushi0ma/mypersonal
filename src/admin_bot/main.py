@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -47,7 +48,12 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(books.process_book_delete, pattern="^admin_confirm_book_delete_"))
 
     logger.info("Админ-бот запущен.")
-    application.run_polling()
+    application.initialize()
+    application.start()
+    application.updater.start_polling()
+    
+    # Держим бота запущенным
+    asyncio.Event().wait()
 
 if __name__ == "__main__":
     main()

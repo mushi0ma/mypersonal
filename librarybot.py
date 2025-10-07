@@ -22,7 +22,7 @@ from functools import wraps
 from time import time
 from collections import defaultdict
 import threading
-
+import asyncio
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
 import src.core.db.data_access as db_data
 from src.core.db.utils import get_db_connection, hash_password
@@ -2194,7 +2194,12 @@ def main() -> None:
     )
 
     application.add_handler(conv_handler)
-    application.run_polling()
+    application.initialize()
+    application.start()
+    application.updater.start_polling()
+    
+    # Держим бота запущенным
+    asyncio.Event().wait()
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,5 @@
 # audit_bot.py
+import asyncio
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -23,7 +24,12 @@ def main() -> None:
     
     logger.info("Бот-аудитор запущен.") # <-- Заменили print() на logger.info()
     
-    application.run_polling()
+    application.initialize()
+    application.start()
+    application.updater.start_polling()
+    
+    # Держим бота запущенным
+    asyncio.Event().wait()
 
 if __name__ == "__main__":
     main()

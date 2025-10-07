@@ -37,14 +37,18 @@ async def main():
     logger.info("🌟 Инициализация системы библиотеки...")
     
     # Запускаем всех ботов в отдельных задачах
-    tasks = [
-        asyncio.create_task(run_bot("Library Bot", "library_bot.main")),
-        asyncio.create_task(run_bot("Admin Bot", "admin_bot.main")),
-        asyncio.create_task(run_bot("Notification Bot", "notification_bot")),
-        asyncio.create_task(run_bot("Audit Bot", "audit_bot")),
+    bots = [
+        ("Library Bot", "library_bot.main"),
+        ("Admin Bot", "admin_bot.main"),
+        ("Notification Bot", "notification_bot"),
+        ("Audit Bot", "audit_bot"),
     ]
     
-    await asyncio.gather(*tasks, return_exceptions=True)
+    # Запускаем все боты параллельно
+    await asyncio.gather(
+        *[run_bot(name, module) for name, module in bots],
+        return_exceptions=True
+    )
 
 if __name__ == "__main__":
     try:
