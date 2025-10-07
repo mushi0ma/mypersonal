@@ -106,10 +106,9 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> St
         reply_markup = keyboards.get_profile_keyboard()
         await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
     except db_data.NotFoundError:
-        await query.edit_message_text("❌ Не удалось найти ваш профиль. Пожалуйста, войдите снова.")
+        await query.edit_message_text("❌ Не удалось найти ваш профиль. Пожалуйста, войдите снова с помощью /start.")
         context.user_data.clear()
-        from src.library_bot.handlers.start import start
-        return await start(update, context)
+        return ConversationHandler.END
 
     return State.USER_MENU
 
@@ -221,10 +220,8 @@ async def process_full_name_edit(update: Update, context: ContextTypes.DEFAULT_T
     with get_db_connection() as conn:
         db_data.update_user_full_name(conn, user_id, new_name)
     await update.message.reply_text("✅ ФИО успешно обновлено!")
-    # Имитируем нажатие на кнопку "Профиль", чтобы показать обновленные данные
-    from telegram import CallbackQuery
-    update.callback_query = CallbackQuery(id="dummy", from_user=update.effective_user, chat_instance="dummy", data="user_profile")
-    await view_profile(update, context)
+    # Возвращаемся в главное меню
+    await user_menu(update, context)
     return ConversationHandler.END
 
 async def process_contact_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -259,10 +256,8 @@ async def verify_new_contact_code(update: Update, context: ContextTypes.DEFAULT_
             db_data.update_user_contact(conn, user_id, new_contact)
         await update.message.reply_text("✅ Контакт успешно обновлен!")
         context.user_data.pop('verification_code', None)
-        # Показываем обновленный профиль
-        from telegram import CallbackQuery
-        update.callback_query = CallbackQuery(id="dummy", from_user=update.effective_user, chat_instance="dummy", data="user_profile")
-        await view_profile(update, context)
+        # Возвращаемся в главное меню
+        await user_menu(update, context)
         return ConversationHandler.END
     else:
         await update.message.reply_text("❌ Неверный код. Попробуйте еще раз.")
@@ -317,10 +312,8 @@ async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEF
         db_data.update_user_password_by_id(conn, user_id, new_password)
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text="🎉 Пароль успешно изменен!")
-    # Показываем обновленный профиль
-    from telegram import CallbackQuery
-    update.callback_query = CallbackQuery(id="dummy", from_user=update.effective_user, chat_instance="dummy", data="user_profile")
-    await view_profile(update, context)
+    # Возвращаемся в главное меню
+    await user_menu(update, context)
     return ConversationHandler.END
 
 # --- ConversationHandler для редактирования профиля ---

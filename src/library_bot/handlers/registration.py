@@ -3,6 +3,7 @@
 import logging
 import random
 import re
+import os
 from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -206,8 +207,7 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
             reg_code = db_data.set_registration_code(conn, user_id)
             context.user_data['user_id_for_activation'] = user_id
 
-        notifier_bot_username = os.getenv("NOTIFICATION_BOT_USERNAME", "ВашБотУведомитель")
-        reply_markup = keyboards.get_notification_subscription_keyboard(notifier_bot_username, reg_code)
+        reply_markup = keyboards.get_notification_subscription_keyboard(config.NOTIFICATION_BOT_USERNAME, reg_code)
 
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
