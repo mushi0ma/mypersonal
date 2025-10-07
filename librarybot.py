@@ -24,9 +24,9 @@ from collections import defaultdict
 import threading
 
 # --- ИМПОРТ ФУНКЦИЙ БАЗЫ ДАННЫХ И ХЕШИРОВАНИЯ ---
-import src.db_data as db_data
-from src.db_utils import get_db_connection, hash_password
-import src.tasks as tasks
+import src.core.db.data_access as db_data
+from src.core.db.utils import get_db_connection, hash_password
+import src.core.tasks as tasks
 
 # --- ИМПОРТ СЕРВИСОВ ---
 from sendgrid import SendGridAPIClient
