@@ -22,11 +22,11 @@ services:
     image: redis:6-alpine
     restart: always
 
-  # --- НОВЫЙ СЕРВИС ДЛЯ ОСНОВНОГО БОТА ---
-  library_bot:
+  # --- ЕДИНЫЙ СЕРВИС ДЛЯ ЗАПУСКА ВСЕХ БОТОВ ---
+  bots:
     build: .
     restart: always
-    command: python src/library_bot/main.py
+    command: python src/main.py
     volumes:
       - .:/app
     environment:
@@ -38,53 +38,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-
-  # --- НОВЫЙ СЕРВИС ДЛЯ АДМИН-БОТА ---
-  admin_bot:
-    build: .
-    restart: always
-    command: python src/admin_bot/main.py
-    volumes:
-      - .:/app
-    environment:
-      - PYTHONPATH=/app
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
-# --- НОВЫЙ СЕРВИС ДЛЯ БОТА-УВЕДОМИТЕЛЯ ---
-  notification_bot:
-    build: .
-    restart: always
-    command: python src/notification_bot.py
-    volumes:
-      - .:/app
-    environment:
-      - PYTHONPATH=/app
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-
-# --- НОВЫЙ СЕРВИС ДЛЯ БОТА-АУДИТОРА ---
-  audit_bot:
-    build: .
-    restart: always
-    command: python src/audit_bot.py
-    volumes:
-      - .:/app
-    environment:
-      - PYTHONPATH=/app
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
 
   # Фоновый обработчик задач Celery
   celery_worker:

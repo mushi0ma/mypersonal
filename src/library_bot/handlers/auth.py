@@ -79,7 +79,8 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Динамический импорт, чтобы избежать циклической зависимости
         from src.library_bot.handlers.user_menu import user_menu
-        return await user_menu(update, context)
+        await user_menu(update, context)
+        return State.USER_MENU
     else:
         attempts = context.user_data.get('login_attempts', 0) + 1
         context.user_data['login_attempts'] = attempts

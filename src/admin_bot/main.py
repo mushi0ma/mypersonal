@@ -8,7 +8,7 @@ from telegram.ext import (
 
 # --- Локальные импорты из новой структуры ---
 from src.core import config
-from src.admin_bot.handlers import stats, books, broadcast
+from src.admin_bot.handlers import stats, books, broadcast, start
 
 # --- Настройка логгера ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -22,13 +22,7 @@ def main() -> None:
     application = Application.builder().token(config.ADMIN_BOT_TOKEN).build()
 
     # --- Основные команды ---
-    application.add_handler(CommandHandler("start", lambda update, context: update.message.reply_text(
-        "👋 **Панель администратора**\n\n"
-        "Команды:\n"
-        "📊 /stats - Статистика и управление пользователями\n"
-        "📚 /books - Управление каталогом книг\n"
-        "📢 /broadcast - Массовая рассылка"
-    ), filters=admin_filter))
+    application.add_handler(CommandHandler("start", start.start, filters=admin_filter))
     application.add_handler(CommandHandler("stats", stats.show_stats_panel, filters=admin_filter))
     application.add_handler(CommandHandler("books", books.show_books_list, filters=admin_filter))
 
