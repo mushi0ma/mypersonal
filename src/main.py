@@ -1,58 +1,60 @@
-# src/main.py
-"""
-Точка входа для запуска всех компонентов системы библиотеки.
-"""
-import logging
 import asyncio
-import sys
-from pathlib import Path
+import logging
+from multiprocessing import Process
 
-# Добавляем корень проекта в sys.path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from logging.handlers import RotatingFileHandler
-
-# Настройка логирования
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-handler = RotatingFileHandler('app.log', maxBytes=10485760, backupCount=5)
-handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(handler)
+def run_library_bot():
+    """Запуск Library Bot в отдельном процессе"""
+    from src.library_bot.main import main
+    import asyncio
+    asyncio.run(main())
 
-async def run_bot(bot_name: str, bot_module: str):
-    """Запускает отдельного бота."""
-    try:
-        logger.info(f"🚀 Запуск {bot_name}...")
-        module = __import__(f"src.{bot_module}", fromlist=['main'])
-        await module.main()
-    except Exception as e:
-        logger.error(f"❌ Ошибка при запуске {bot_name}: {e}", exc_info=True)
+def run_admin_bot():
+    """Запуск Admin Bot в отдельном процессе"""
+    from src.admin_bot.main import main
+    import asyncio
+    asyncio.run(main())
 
-async def main():
-    """Запускает все боты параллельно."""
-    logger.info("🌟 Инициализация системы библиотеки...")
-    
-    # Запускаем всех ботов в отдельных задачах
-    bots = [
-        ("Library Bot", "library_bot.main"),
-        ("Admin Bot", "admin_bot.main"),
-        ("Notification Bot", "notification_bot"),
-        ("Audit Bot", "audit_bot"),
-    ]
-    
-    # Запускаем все боты параллельно
-    await asyncio.gather(
-        *[run_bot(name, module) for name, module in bots],
-        return_exceptions=True
-    )
+def run_notification_bot():
+    """Запуск Notification Bot в отдельном процессе"""
+    from src.notification_bot import main
+    import asyncio
+    asyncio.run(main())
+
+def run_audit_bot():
+    """Запуск Audit Bot в отдельном процессе"""
+    from src.audit_bot import main
+    import asyncio
+    asyncio.run(main())
 
 if __name__ == "__main__":
+    logger.info("🌟 Инициализация системы библиотеки...")
+    
+    # Создаём процессы для каждого бота
+    processes = [
+        Process(target=run_library_bot, name="Library Bot"),
+        Process(target=run_admin_bot, name="Admin Bot"),
+        Process(target=run_notification_bot, name="Notification Bot"),
+        Process(target=run_audit_bot, name="Audit Bot"),
+    ]
+    
+    # Запускаем все процессы
+    for process in processes:
+        logger.info(f"🚀 Запуск {process.name}...")
+        process.start()
+    
+    # Ждём завершения всех процессов
     try:
-        asyncio.run(main())
+        for process in processes:
+            process.join()
     except KeyboardInterrupt:
-        logger.info("👋 Система остановлена")
-        sys.exit(0)
+        logger.info("⛔ Получен сигнал остановки...")
+        for process in processes:
+            process.terminate()
+            process.join()
+        logger.info("✅ Все боты остановлены")

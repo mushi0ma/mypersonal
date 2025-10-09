@@ -129,3 +129,28 @@ Traceback (most recent call last):
   File "/usr/local/lib/python3.11/asyncio/selector_events.py", line 88, in close
     raise RuntimeError("Cannot close a running event loop")
 RuntimeError: Cannot close a running event loop
+2025-10-07 08:12:43,749 - __main__ - INFO - 🌟 Инициализация системы библиотеки...
+2025-10-07 08:12:43,751 - __main__ - INFO - 🚀 Запуск Library Bot...
+2025-10-07 08:12:44,852 - __main__ - ERROR - ❌ Ошибка при запуске Library Bot: object NoneType can't be used in 'await' expression
+Traceback (most recent call last):
+  File "/app/src/main.py", line 31, in run_bot
+    await module.main()
+TypeError: object NoneType can't be used in 'await' expression
+2025-10-07 08:12:44,860 - __main__ - INFO - 🚀 Запуск Admin Bot...
+2025-10-07 08:12:45,109 - __main__ - ERROR - ❌ Ошибка при запуске Admin Bot: object NoneType can't be used in 'await' expression
+Traceback (most recent call last):
+  File "/app/src/main.py", line 31, in run_bot
+    await module.main()
+TypeError: object NoneType can't be used in 'await' expression
+2025-10-07 08:12:45,113 - __main__ - INFO - 🚀 Запуск Notification Bot...
+2025-10-07 08:12:45,172 - __main__ - ERROR - ❌ Ошибка при запуске Notification Bot: object NoneType can't be used in 'await' expression
+Traceback (most recent call last):
+  File "/app/src/main.py", line 31, in run_bot
+    await module.main()
+TypeError: object NoneType can't be used in 'await' expression
+2025-10-07 08:12:45,176 - __main__ - INFO - 🚀 Запуск Audit Bot...
+2025-10-07 08:12:45,245 - __main__ - ERROR - ❌ Ошибка при запуске Audit Bot: object NoneType can't be used in 'await' expression
+Traceback (most recent call last):
+  File "/app/src/main.py", line 31, in run_bot
+    await module.main()
+TypeError: object NoneType can't be used in 'await' expression
