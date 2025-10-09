@@ -1,7 +1,7 @@
-# init_db.py
-import os
-import psycopg2
-from src.core.db.utils import get_db_connection
+# src/init_db.py
+import asyncio
+import asyncpg
+from src.core.db.utils import get_db_connection, init_db_pool, close_db_pool
 
 SCHEMA_COMMANDS = (
     """
@@ -88,21 +88,18 @@ SCHEMA_COMMANDS = (
     """
 )
 
-def initialize_database():
-    """Создает все необходимые таблицы с корректной схемой."""
+async def initialize_database():
+    """Асинхронно создает все необходимые таблицы с корректной схемой."""
     try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                for command in SCHEMA_COMMANDS:
-                    cur.execute(command)
+        async with get_db_connection() as conn:
+            for command in SCHEMA_COMMANDS:
+                await conn.execute(command)
         print("✅ Схема базы данных успешно инициализирована.")
-    except (psycopg2.Error, ConnectionError) as e:
+    except (asyncpg.PostgresError, ConnectionError) as e:
         print(f"❌ Ошибка при инициализации схемы базы данных: {e}")
 
-
-def seed_data():
-    """Заполняет таблицы авторов и книг начальными данными."""
-    # --- РАСШИРЕННЫЙ СПИСОК АВТОРОВ ---
+async def seed_data():
+    """Асинхронно заполняет таблицы авторов и книг начальными данными."""
     authors_to_add = list(set([
         "Михаил Булгаков", "Федор Достоевский", "Лев Толстой", "Антон Чехов", "Александр Пушкин",
         "Фрэнк Герберт", "Айзек Азимов", "Джордж Оруэлл", "Олдос Хаксли", "Дж. Р. Р. Толкин",
@@ -112,7 +109,6 @@ def seed_data():
         "Филип К. Дик", "Уильям Гибсон", "Нил Стивенсон", "Харуки Мураками", "Анджей Сапковский"
     ]))
 
-    # --- РАСШИРЕННЫЙ СПИСОК КНИГ ---
     books_to_add = [
         ("Мастер и Маргарита", "Михаил Булгаков", "Роман", "Мистический роман о визите дьявола в Москву.", 5),
         ("Собачье сердце", "Михаил Булгаков", "Повесть", "Сатирическая повесть об опасных социальных экспериментах.", 3),
@@ -146,34 +142,53 @@ def seed_data():
         ("Ведьмак: Последнее желание", "Анджей Сапковский", "Фэнтези", "Сборник рассказов о ведьмаке Геральте из Ривии.", 4)
     ]
     try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                # --- УЛУЧШЕННАЯ ЛОГИКА ЗАПОЛНЕНИЯ ---
-                # 1. Сначала вставляем всех авторов
-                cur.execute("INSERT INTO authors (name) VALUES " + ", ".join(["(%s)"] * len(authors_to_add)) + " ON CONFLICT (name) DO NOTHING", authors_to_add)
-                
-                # 2. Теперь получаем актуальный словарь 'имя' -> 'id' из базы данных
-                author_ids = {}
-                cur.execute("SELECT id, name FROM authors")
-                for row in cur.fetchall():
-                    author_ids[row[1]] = row[0]
+        async with get_db_connection() as conn:
+            # 1. Сначала вставляем всех авторов
+            # asyncpg не поддерживает `VALUES %s, %s`, используем `executemany`
+            await conn.executemany("INSERT INTO authors (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
+                                   [(author,) for author in authors_to_add])
 
-                # 3. Вставляем книги, используя актуальные ID авторов
-                for book_title, author_name, genre, description, quantity in books_to_add:
-                    author_id = author_ids.get(author_name)
-                    if author_id:
-                        cur.execute(
-                            """
-                            INSERT INTO books (name, author_id, genre, description, total_quantity, available_quantity)
-                            VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING
-                            """, (book_title, author_id, genre, description, quantity, quantity)
-                        )
+            # 2. Теперь получаем актуальный словарь 'имя' -> 'id' из базы данных
+            author_records = await conn.fetch("SELECT id, name FROM authors")
+            author_ids = {record['name']: record['id'] for record in author_records}
+
+            # 3. Вставляем книги, используя актуальные ID авторов
+            books_data_to_insert = []
+            for book_title, author_name, genre, description, quantity in books_to_add:
+                author_id = author_ids.get(author_name)
+                if author_id:
+                    books_data_to_insert.append(
+                        (book_title, author_id, genre, description, quantity, quantity)
+                    )
+
+            if books_data_to_insert:
+                await conn.executemany(
+                    """
+                    INSERT INTO books (name, author_id, genre, description, total_quantity, available_quantity)
+                    VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (name) DO NOTHING
+                    """, books_data_to_insert
+                )
         print("✅ Таблицы авторов и книг успешно заполнены.")
-    except (psycopg2.Error, ConnectionError) as e:
+    except (asyncpg.PostgresError, ConnectionError) as e:
         print(f"❌ Ошибка при заполнении таблиц: {e}")
 
-if __name__ == '__main__':
+async def main():
+    """Основная функция для запуска инициализации."""
+    # Инициализируем пул соединений
+    await init_db_pool()
+
     print("--- Шаг 1: Инициализация схемы базы данных ---")
-    initialize_database()
+    await initialize_database()
+
     print("\n--- Шаг 2: Заполнение начальными данными ---")
-    seed_data()
+    await seed_data()
+
+    # Закрываем пул соединений
+    await close_db_pool()
+
+if __name__ == '__main__':
+    # Загружаем переменные окружения из основного .env файла
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    asyncio.run(main())

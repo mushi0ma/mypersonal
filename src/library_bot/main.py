@@ -34,7 +34,7 @@ handler.setFormatter(
 logger.addHandler(handler)
 
 
-def main() -> None:
+async def main() -> None:
     """Запускает основного бота, собирая его из модулей."""
     application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
@@ -139,14 +139,11 @@ def main() -> None:
     )
 
     application.add_handler(conv_handler)
-    logger.info("Основной бот запущен...")
-    application.initialize()
-    application.start()
-    application.updater.start_polling()
+    logger.info("Основной бот инициализирован и готов к запуску...")
     
-    # Держим бота запущенным
-    asyncio.Event().wait()
+    # Запускаем бота асинхронно
+    await application.run_async()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

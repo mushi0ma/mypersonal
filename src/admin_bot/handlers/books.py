@@ -18,9 +18,9 @@ from src.core.utils import rate_limit
 logger = logging.getLogger(__name__)
 
 # --- Вспомогательная функция для построения карточки книги ---
-def _build_book_details_content(conn, book_id, current_page=0):
+async def _build_book_details_content(conn, book_id, current_page=0):
     """Строит контент для карточки книги (текст и клавиатуру)."""
-    book = db_data.get_book_details(conn, book_id)
+    book = await db_data.get_book_details(conn, book_id)
     if not book:
         raise db_data.NotFoundError("Книга не найдена.")
 
@@ -57,8 +57,8 @@ async def show_books_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['current_books_page'] = page
     offset = page * books_per_page
 
-    with get_db_connection() as conn:
-        books, total_books = db_data.get_all_books_paginated(conn, limit=books_per_page, offset=offset)
+    async with get_db_connection() as conn:
+        books, total_books = await db_data.get_all_books_paginated(conn, limit=books_per_page, offset=offset)
 
     message_text = f"📚 **Управление каталогом** (Всего: {total_books})\n\nСтраница {page + 1}:"
     reply_markup = keyboards.get_books_list_keyboard(books, total_books, page, books_per_page)
@@ -76,8 +76,8 @@ async def show_book_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_page = context.user_data.get('current_books_page', 0)
 
     try:
-        with get_db_connection() as conn:
-            content = _build_book_details_content(conn, book_id, current_page)
+        async with get_db_connection() as conn:
+            content = await _build_book_details_content(conn, book_id, current_page)
 
         if query.message.photo and not content.get('cover_id'):
             await query.message.delete()
@@ -156,8 +156,8 @@ async def add_book_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     should_notify = "_notify" in query.data
     book_data = context.user_data.pop('new_book')
 
-    with get_db_connection() as conn:
-        new_book_id = db_data.add_new_book(conn, book_data)
+    async with get_db_connection() as conn:
+        new_book_id = await db_data.add_new_book(conn, book_data)
 
     tasks.notify_admin.delay(text=f"➕ Админ добавил книгу «{book_data['name']}».")
     if should_notify:
@@ -196,8 +196,8 @@ async def prompt_for_update(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def process_book_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     book_id = context.user_data['book_to_edit']
     field = context.user_data['field_to_edit']
-    with get_db_connection() as conn:
-        db_data.update_book_field(conn, book_id, field, update.message.text)
+    async with get_db_connection() as conn:
+        await db_data.update_book_field(conn, book_id, field, update.message.text)
 
     tasks.notify_admin.delay(text=f"✏️ Админ отредактировал поле `{field}` для книги ID {book_id}.")
     await update.message.reply_text("✅ Информация о книге успешно обновлена!")
@@ -228,9 +228,9 @@ async def process_book_delete(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     book_id = int(query.data.split('_')[4])
 
-    with get_db_connection() as conn:
-        book_to_delete = db_data.get_book_details(conn, book_id)
-        db_data.delete_book(conn, book_id)
+    async with get_db_connection() as conn:
+        book_to_delete = await db_data.get_book_details(conn, book_id)
+        await db_data.delete_book(conn, book_id)
 
     tasks.notify_admin.delay(text=f"🗑️ Админ удалил книгу «{book_to_delete.get('name', 'ID: ' + str(book_id))}».")
     await query.edit_message_text("✅ Книга успешно удалена.")

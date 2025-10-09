@@ -1,6 +1,7 @@
 # src/library_bot/handlers/user_menu.py
 
 import logging
+import random
 from telegram import Update
 from telegram.ext import (
     ContextTypes,
@@ -26,16 +27,14 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State
     """Отображает главное меню пользователя."""
     user = context.user_data.get('current_user')
     if not user:
-        # Если пользователь не авторизован, отправляем его в начало
         from src.library_bot.handlers.start import start
         return await start(update, context)
 
     try:
-        with get_db_connection() as conn:
-            # Обновляем данные на случай, если они изменились
-            context.user_data['current_user'] = db_data.get_user_by_id(conn, user['id'])
+        async with get_db_connection() as conn:
+            context.user_data['current_user'] = await db_data.get_user_by_id(conn, user['id'])
             user = context.user_data['current_user']
-            borrowed_books = db_data.get_borrowed_books(conn, user['id'])
+            borrowed_books = await db_data.get_borrowed_books(conn, user['id'])
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных для меню пользователя {user['id']}: {e}")
         borrowed_books = []
@@ -52,7 +51,6 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State
         await update.callback_query.edit_message_text(
             message_text, reply_markup=reply_markup, parse_mode='Markdown'
         )
-    # Этот else нужен, если мы попадаем в меню не через кнопку, а после какого-то действия
     else:
         await update.message.reply_text(
             message_text, reply_markup=reply_markup, parse_mode='Markdown'
@@ -65,9 +63,10 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
     user = context.user_data.get('current_user')
     if user:
-        with get_db_connection() as conn:
-            db_data.log_activity(conn, user_id=user['id'], action="logout")
-            if db_data.get_borrowed_books(conn, user['id']):
+        async with get_db_connection() as conn:
+            await db_data.log_activity(conn, user_id=user['id'], action="logout")
+            borrowed_books = await db_data.get_borrowed_books(conn, user['id'])
+            if borrowed_books:
                 await query.answer("❌ Вы не можете выйти, пока у вас есть книги на руках!", show_alert=True)
                 return State.USER_MENU
 
@@ -81,9 +80,9 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> St
     await query.answer()
     user_id = context.user_data['current_user']['id']
     try:
-        with get_db_connection() as conn:
-            user_profile = db_data.get_user_profile(conn, user_id)
-            borrowed_books = db_data.get_borrowed_books(conn, user_id)
+        async with get_db_connection() as conn:
+            user_profile = await db_data.get_user_profile(conn, user_id)
+            borrowed_books = await db_data.get_borrowed_books(conn, user_id)
 
         borrow_limit = get_user_borrow_limit(user_profile['status'])
         reg_date_str = user_profile['registration_date'].strftime('%d.%m.%Y')
@@ -117,8 +116,8 @@ async def view_borrow_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    with get_db_connection() as conn:
-        history = db_data.get_user_borrow_history(conn, user_id)
+    async with get_db_connection() as conn:
+        history = await db_data.get_user_borrow_history(conn, user_id)
 
     message_parts = ["**📜 Ваша история взятых книг**\n"]
     if history:
@@ -140,8 +139,8 @@ async def show_notifications(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     user_id = context.user_data['current_user']['id']
     try:
-        with get_db_connection() as conn:
-            notifications = db_data.get_notifications_for_user(conn, user_id)
+        async with get_db_connection() as conn:
+            notifications = await db_data.get_notifications_for_user(conn, user_id)
         message_parts = ["📬 **Ваши последние уведомления:**\n"]
         for notif in notifications:
             date_str = notif['created_at'].strftime('%d.%m.%Y %H:%M')
@@ -161,8 +160,9 @@ async def ask_delete_self_confirmation(update: Update, context: ContextTypes.DEF
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    with get_db_connection() as conn:
-        if db_data.get_borrowed_books(conn, user_id):
+    async with get_db_connection() as conn:
+        borrowed_books = await db_data.get_borrowed_books(conn, user_id)
+        if borrowed_books:
             await query.answer("❌ Вы не можете удалить аккаунт, пока у вас есть книги на руках.", show_alert=True)
             return State.USER_MENU
 
@@ -177,9 +177,9 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
     user_id = context.user_data['current_user']['id']
     username = context.user_data['current_user'].get('username', f'ID: {user_id}')
 
-    with get_db_connection() as conn:
-        db_data.delete_user_by_self(conn, user_id)
-        db_data.log_activity(conn, user_id=user_id, action="self_delete_account", details=f"Username: {username}")
+    async with get_db_connection() as conn:
+        await db_data.delete_user_by_self(conn, user_id)
+        await db_data.log_activity(conn, user_id=user_id, action="self_delete_account", details=f"Username: {username}")
 
     tasks.notify_admin.delay(text=f"🗑️ Пользователь @{username} самостоятельно удалил свой аккаунт.", category='user_self_deleted')
 
@@ -217,10 +217,9 @@ async def process_full_name_edit(update: Update, context: ContextTypes.DEFAULT_T
     """Обновляет ФИО пользователя."""
     new_name = update.message.text
     user_id = context.user_data['current_user']['id']
-    with get_db_connection() as conn:
-        db_data.update_user_full_name(conn, user_id, new_name)
+    async with get_db_connection() as conn:
+        await db_data.update_user_full_name(conn, user_id, new_name)
     await update.message.reply_text("✅ ФИО успешно обновлено!")
-    # Возвращаемся в главное меню
     await user_menu(update, context)
     return ConversationHandler.END
 
@@ -228,10 +227,10 @@ async def process_contact_edit(update: Update, context: ContextTypes.DEFAULT_TYP
     """Получает новый контакт и отправляет на него код."""
     new_contact = normalize_phone_number(update.message.text)
     try:
-        with get_db_connection() as conn:
-            if db_data.get_user_by_login(conn, new_contact):
-                await update.message.reply_text("❌ Этот контакт уже занят. Попробуйте другой.")
-                return State.EDITING_CONTACT
+        async with get_db_connection() as conn:
+            await db_data.get_user_by_login(conn, new_contact)
+        await update.message.reply_text("❌ Этот контакт уже занят. Попробуйте другой.")
+        return State.EDITING_CONTACT
     except db_data.NotFoundError:
         pass
 
@@ -252,11 +251,10 @@ async def verify_new_contact_code(update: Update, context: ContextTypes.DEFAULT_
     if update.message.text == context.user_data.get('verification_code'):
         user_id = context.user_data['current_user']['id']
         new_contact = context.user_data.pop('new_contact_temp')
-        with get_db_connection() as conn:
-            db_data.update_user_contact(conn, user_id, new_contact)
+        async with get_db_connection() as conn:
+            await db_data.update_user_contact(conn, user_id, new_contact)
         await update.message.reply_text("✅ Контакт успешно обновлен!")
         context.user_data.pop('verification_code', None)
-        # Возвращаемся в главное меню
         await user_menu(update, context)
         return ConversationHandler.END
     else:
@@ -308,11 +306,10 @@ async def confirm_and_set_new_password(update: Update, context: ContextTypes.DEF
     user_id = context.user_data['current_user']['id']
     new_password = context.user_data.pop('new_password_temp')
 
-    with get_db_connection() as conn:
-        db_data.update_user_password_by_id(conn, user_id, new_password)
+    async with get_db_connection() as conn:
+        await db_data.update_user_password_by_id(conn, user_id, new_password)
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text="🎉 Пароль успешно изменен!")
-    # Возвращаемся в главное меню
     await user_menu(update, context)
     return ConversationHandler.END
 

@@ -26,8 +26,8 @@ async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     message_text = update.message.text
     await update.message.reply_text("⏳ Начинаю рассылку...")
     try:
-        with get_db_connection() as conn:
-            user_db_ids = db_data.get_all_user_ids(conn)
+        async with get_db_connection() as conn:
+            user_db_ids = await db_data.get_all_user_ids(conn)
 
         for user_id in user_db_ids:
             tasks.notify_user.delay(user_id=user_id, text=message_text, category='broadcast')

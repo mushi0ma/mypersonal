@@ -1,6 +1,7 @@
 # src/library_bot/handlers/auth.py
 
 import logging
+import random
 from time import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
@@ -31,8 +32,8 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     contact_input = update.message.text
     contact_processed = normalize_phone_number(contact_input)
     try:
-        with get_db_connection() as conn:
-            user = db_data.get_user_by_login(conn, contact_processed)
+        async with get_db_connection() as conn:
+            user = await db_data.get_user_by_login(conn, contact_processed)
         context.user_data['login_user'] = user
         context.user_data['login_attempts'] = 0
 
@@ -67,8 +68,8 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
         pass
 
     if hash_password(input_password) == user['password_hash']:
-        with get_db_connection() as conn:
-            db_data.log_activity(conn, user_id=user['id'], action="login")
+        async with get_db_connection() as conn:
+            await db_data.log_activity(conn, user_id=user['id'], action="login")
 
         context.user_data.pop('login_attempts', None)
         login_lockouts.pop(user_id, None)
@@ -115,8 +116,8 @@ async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFA
     contact_input = update.message.text
     contact_processed = normalize_phone_number(contact_input)
     try:
-        with get_db_connection() as conn:
-            user = db_data.get_user_by_login(conn, contact_processed)
+        async with get_db_connection() as conn:
+            user = await db_data.get_user_by_login(conn, contact_processed)
     except db_data.NotFoundError:
         await update.message.reply_text("❌ Пользователь с такими данными не найден.")
         return State.FORGOT_PASSWORD_CONTACT
@@ -173,8 +174,8 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
     login_query = context.user_data['forgot_password_contact']
     final_password = context.user_data.pop('forgot_password_temp')
     try:
-        with get_db_connection() as conn:
-            db_data.update_user_password(conn, login_query, final_password)
+        async with get_db_connection() as conn:
+            await db_data.update_user_password(conn, login_query, final_password)
         await context.bot.send_message(chat_id=update.effective_chat.id, text="🎉 Пароль успешно обновлен! Теперь вы можете войти.")
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля: {e}", exc_info=True)
