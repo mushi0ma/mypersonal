@@ -1,4 +1,4 @@
-# build.ps1 - PowerShell скрипт для управления Docker проектом
+﻿# build.ps1 - PowerShell скрипт для управления Docker проектом
 param(
     [Parameter(Position=0)]
     [string]$Command = "help",
