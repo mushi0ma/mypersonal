@@ -66,15 +66,15 @@ def mock_context():
     context.user_data = {}
     return context
 
-@asynccontextmanager
-async def mock_db_connection(db_session):
-    """An async context manager to mock get_db_connection."""
-    yield db_session
-
 async def test_stats_command(db_session, monkeypatch, mock_context, patched_admin_bot_handlers):
     """Tests that the /stats command shows the summary panel."""
     stats = patched_admin_bot_handlers.stats
-    monkeypatch.setattr(stats, 'get_db_connection', lambda: mock_db_connection(db_session))
+
+    @asynccontextmanager
+    async def mock_manager():
+        yield db_session
+
+    monkeypatch.setattr(stats, 'get_db_connection', mock_manager)
     
     update = _create_mock_update(text="/stats")
     
@@ -91,7 +91,11 @@ async def test_add_book_flow(db_session, monkeypatch, mock_context, patched_admi
     books = patched_admin_bot_handlers.books
     AdminState = patched_admin_bot_handlers.AdminState
     
-    monkeypatch.setattr(books, 'get_db_connection', lambda: mock_db_connection(db_session))
+    @asynccontextmanager
+    async def mock_manager():
+        yield db_session
+
+    monkeypatch.setattr(books, 'get_db_connection', mock_manager)
 
     # Step 1: Start the conversation
     update = _create_mock_update(callback_data="admin_add_book_start")
@@ -130,8 +134,8 @@ async def test_add_book_flow(db_session, monkeypatch, mock_context, patched_admi
 
     # Step 7: Save the book
     update = _create_mock_update(callback_data="add_book_save_simple")
-    # This call needs to be awaited
-    await books.add_book_save(update, mock_context)
+    state = await books.add_book_save(update, mock_context)
+    assert state == ConversationHandler.END
 
     # Final check in the DB
     book_from_db = await db_session.fetchrow("SELECT name, author_id FROM books WHERE name = $1", 'Война и мир')
