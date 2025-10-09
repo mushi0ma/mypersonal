@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # --- Ограничение доступа ---
 admin_filter = filters.User(user_id=config.ADMIN_TELEGRAM_ID)
 
-def main() -> None:
+async def main() -> None:
     """Запускает админ-бота, собирая его из модулей."""
     application = Application.builder().token(config.ADMIN_BOT_TOKEN).build()
 
@@ -47,13 +47,10 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(books.ask_for_book_delete_confirmation, pattern="^admin_delete_book_"))
     application.add_handler(CallbackQueryHandler(books.process_book_delete, pattern="^admin_confirm_book_delete_"))
 
-    logger.info("Админ-бот запущен.")
-    application.initialize()
-    application.start()
-    application.updater.start_polling()
+    logger.info("Админ-бот инициализирован и готов к запуску.")
     
-    # Держим бота запущенным
-    asyncio.Event().wait()
+    # Запускаем бота асинхронно
+    await application.run_async()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

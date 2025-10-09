@@ -33,9 +33,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         registration_code = context.args[0]
         
         try:
-            with get_db_connection() as conn:
+            async with get_db_connection() as conn:
                 # Привязываем telegram_id к аккаунту по коду
-                db_data.link_telegram_id_by_code(
+                await db_data.link_telegram_id_by_code(
                     conn,
                     code=registration_code,
                     telegram_id=user.id,
@@ -128,19 +128,19 @@ def setup_notification_bot() -> Application:
     logger.info("🔧 Notification bot сконфигурирован")
     return application
 
-def main() -> None:
-    """Legacy точка входа для прямого запуска."""
-    logger.warning(
-    "⚠️  Прямой запуск notification_bot.py устарел. "
-    "Используйте src/main.py для запуска всех ботов."
-    )
+async def main() -> None:
+    """
+    Основная асинхронная функция для запуска бота-уведомителя.
+    Используется в `src/main.py` для параллельного запуска.
+    """
+    logger.info("🚀 Запуск Notification Bot...")
     application = setup_notification_bot()
-    application.initialize()
-    application.start()
-    application.updater.start_polling()
     
-    # Держим бота запущенным
-    asyncio.Event().wait()
+    # Запускаем бота асинхронно
+    await application.run_async()
 
-if __name__ == "main":
-    main()
+if __name__ == "__main__":
+    logger.warning(
+        "⚠️ Запуск этого файла напрямую предназначен только для тестирования."
+    )
+    asyncio.run(main())

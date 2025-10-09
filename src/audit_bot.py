@@ -17,19 +17,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Этот бот предназначен только для администратора системы.")
 
-def main() -> None:
+async def main() -> None:
     """Запускает бота-аудитора."""
     application = Application.builder().token(config.ADMIN_NOTIFICATION_BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     
-    logger.info("Бот-аудитор запущен.") # <-- Заменили print() на logger.info()
+    logger.info("Бот-аудитор инициализирован и готов к запуску.")
     
-    application.initialize()
-    application.start()
-    application.updater.start_polling()
-    
-    # Держим бота запущенным
-    asyncio.Event().wait()
+    # Запускаем бота асинхронно
+    await application.run_async()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

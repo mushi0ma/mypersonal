@@ -1,55 +1,41 @@
 # tests/conftest.py
-import pytest
+import pytest_asyncio
 import os
-import psycopg2
-from psycopg2 import pool
 from dotenv import load_dotenv
+import asyncpg
+
+# Загружаем переменные из .env.test ПЕРЕД импортом других модулей
+load_dotenv(dotenv_path='.env.test')
+
 # Импортируем схему из ее нового местоположения в src
 from src.init_db import SCHEMA_COMMANDS
 
-# Загружаем переменные из .env.test
-load_dotenv(dotenv_path='.env.test')
-
-@pytest.fixture(scope="session")
-def test_db_connection():
-    """Создает и предоставляет соединение с тестовой базой данных на всю сессию."""
-    conn_pool = None
+@pytest_asyncio.fixture(scope="function")
+async def db_session():
+    """
+    Для каждого теста:
+    1. Создает соединение с БД.
+    2. Создает чистую схему.
+    3. Предоставляет соединение тесту.
+    4. Закрывает соединение.
+    Это обеспечивает максимальную изоляцию, решая проблемы с event loop.
+    """
     conn = None
     try:
-        conn_pool = psycopg2.pool.SimpleConnectionPool(
-            minconn=1, maxconn=1,
-            dbname=os.getenv("POSTGRES_DB"),
-            user=os.getenv("POSTGRES_USER"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            host=os.getenv("DB_HOST"),
-            port=os.getenv("DB_PORT")
+        conn = await asyncpg.connect(
+            database="test_db",
+            user="test_user",
+            password="test_password",
+            host="localhost",
+            port="5434"
         )
-        conn = conn_pool.getconn()
+        # Полная очистка и создание схемы для каждого теста
+        await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        for command in SCHEMA_COMMANDS:
+            await conn.execute(command)
+
         yield conn
+
     finally:
-        if conn and conn_pool:
-            conn_pool.putconn(conn)
-        if conn_pool:
-            conn_pool.closeall()
-
-@pytest.fixture(scope="function")
-def db_session(test_db_connection):
-    """
-    Для каждого теста: создает чистую схему БД, предоставляет сессию,
-    а после теста все удаляет.
-    """
-    cursor = test_db_connection.cursor()
-    
-    # --- УПРОЩЕННАЯ ЛОГИКА ---
-    # Просто итерируемся по импортированным командам
-    for command in SCHEMA_COMMANDS:
-        cursor.execute(command)
-
-    test_db_connection.commit()
-    
-    yield test_db_connection # Предоставляем настроенную сессию тесту
-
-    # --- Очистка после теста ---
-    cursor.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
-    test_db_connection.commit()
-    cursor.close()
+        if conn:
+            await conn.close()

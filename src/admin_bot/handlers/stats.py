@@ -1,8 +1,7 @@
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
-from src.core import config
 from src.core.db import data_access as db_data
 from src.core.db.utils import get_db_connection
 from src.core import tasks
@@ -30,21 +29,17 @@ async def show_stats_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
 
     try:
-        with get_db_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM users WHERE telegram_id IS NOT NULL")
-            total_users = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM books")
-            total_books = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM borrowed_books WHERE return_date IS NULL")
-            currently_borrowed = cur.fetchone()[0]
+        async with get_db_connection() as conn:
+            total_users = await conn.fetchval("SELECT COUNT(*) FROM users WHERE telegram_id IS NOT NULL")
+            total_books = await conn.fetchval("SELECT COUNT(*) FROM books")
+            currently_borrowed = await conn.fetchval("SELECT COUNT(*) FROM borrowed_books WHERE return_date IS NULL")
 
         message = (
             f"📊 **Панель статистики**\n\n"
-            f"👥 Активных пользователей: **{total_users}**\n"
-            f"📚 Книг в каталоге: **{total_books}**\n"
-            f"📖 Книг на руках: **{currently_borrowed}**\n"
-            f"✅ Книг доступно: **{total_books - currently_borrowed}**"
+            f"👥 Активных пользователей: **{total_users or 0}**\n"
+            f"📚 Книг в каталоге: **{total_books or 0}**\n"
+            f"📖 Книг на руках: **{currently_borrowed or 0}**\n"
+            f"✅ Книг доступно: **{(total_books or 0) - (currently_borrowed or 0)}**"
         )
         reply_markup = keyboards.get_stats_panel_keyboard()
 
@@ -55,7 +50,12 @@ async def show_stats_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Ошибка при получении статистики: {e}", exc_info=True)
-        await update.effective_message.reply_text(f"❌ Ошибка при получении статистики: {e}")
+        error_message = f"❌ Ошибка при получении статистики: {e}"
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await update.message.reply_text(error_message)
+
 
 async def show_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает постраничный список пользователей."""
@@ -67,8 +67,8 @@ async def show_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['current_stats_page'] = page
     offset = page * users_per_page
     try:
-        with get_db_connection() as conn:
-            users, total_users = db_data.get_all_users(conn, limit=users_per_page, offset=offset)
+        async with get_db_connection() as conn:
+            users, total_users = await db_data.get_all_users(conn, limit=users_per_page, offset=offset)
 
         message_text = f"👥 **Список пользователей** (Всего: {total_users})\n\nСтраница {page + 1}:"
         reply_markup = keyboards.get_users_list_keyboard(users, total_users, page, users_per_page)
@@ -85,9 +85,9 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_page = context.user_data.get('current_stats_page', 0)
     user_id = int(query.data.split('_')[3])
     try:
-        with get_db_connection() as conn:
-            user = db_data.get_user_by_id(conn, user_id)
-            borrow_history = db_data.get_user_borrow_history(conn, user_id)
+        async with get_db_connection() as conn:
+            user = await db_data.get_user_by_id(conn, user_id)
+            borrow_history = await db_data.get_user_borrow_history(conn, user_id)
 
         reg_date = user['registration_date'].strftime("%d.%m.%Y %H:%M")
         age = calculate_age(user.get('dob'))
@@ -129,10 +129,10 @@ async def process_delete_confirmation(update: Update, context: ContextTypes.DEFA
     user_id = int(query.data.split('_')[3])
     current_page = context.user_data.get('current_stats_page', 0)
     try:
-        with get_db_connection() as conn:
-            user_to_delete = db_data.get_user_by_id(conn, user_id)
+        async with get_db_connection() as conn:
+            user_to_delete = await db_data.get_user_by_id(conn, user_id)
             username = user_to_delete.get('username', f'ID: {user_id}')
-            db_data.delete_user_by_admin(conn, user_id)
+            await db_data.delete_user_by_admin(conn, user_id)
 
         tasks.notify_admin.delay(text=f"🗑️ Админ удалил (анонимизировал) пользователя: @{username}", category='admin_action')
         await query.edit_message_text("✅ Пользователь успешно удален (анонимизирован).")
@@ -151,9 +151,9 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id, page = int(parts[2]), int(parts[3])
 
     try:
-        with get_db_connection() as conn:
-            logs, total_logs = db_data.get_user_activity(conn, user_id, limit=10, offset=page * 10)
-            user = db_data.get_user_by_id(conn, user_id)
+        async with get_db_connection() as conn:
+            logs, total_logs = await db_data.get_user_activity(conn, user_id, limit=10, offset=page * 10)
+            user = await db_data.get_user_by_id(conn, user_id)
 
         message_parts = [f"**📜 Журнал действий для `{user['username']}`** (Стр. {page + 1})\n"]
         if logs:

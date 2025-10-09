@@ -1,59 +1,61 @@
-import psycopg2
-from redis import Redis
-from db_utils import get_db_connection
+# src/health_check.py
 import os
-from tasks import celery_app, notify_admin
+import logging
+import asyncpg
+from redis import Redis
+from src.core import config
 
-def check_database():
-    """Проверка подключения к БД."""
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+async def check_database():
+    """Асинхронно проверяет соединение с базой данных."""
     try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-        return True, "OK"
+        conn = await asyncpg.connect(
+            user=config.DB_USER,
+            password=config.DB_PASSWORD,
+            database=config.DB_NAME,
+            host=config.DB_HOST,
+            port=config.DB_PORT,
+            timeout=5  # 5-секундный таймаут
+        )
+        await conn.close()
+        return True, "Database connection successful."
     except Exception as e:
+        logger.error(f"Database health check failed: {e}")
         return False, str(e)
 
 def check_redis():
-    """Проверка подключения к Redis."""
+    """Проверяет соединение с Redis."""
     try:
-        redis_client = Redis.from_url(os.getenv("CELERY_BROKER_URL"))
-        redis_client.ping()
-        return True, "OK"
+        redis_host = config.CELERY_BROKER_URL.split('//')[1].split(':')[0]
+        r = Redis(host=redis_host, port=6379, socket_connect_timeout=5)
+        r.ping()
+        return True, "Redis connection successful."
     except Exception as e:
+        logger.error(f"Redis health check failed: {e}")
         return False, str(e)
 
-def check_celery_workers():
-    """Проверка работы Celery workers."""
-    try:
-        inspect = celery_app.control.inspect()
-        stats = inspect.stats()
-        if stats:
-            active_workers = len(stats)
-            return True, f"{active_workers} workers активны"
-        else:
-            return False, "Нет активных workers"
-    except Exception as e:
-        return False, str(e)
+async def run_health_check():
+    """Запускает все проверки и возвращает общий статус."""
+    db_ok, db_msg = await check_database()
+    redis_ok, redis_msg = check_redis()
 
-def run_health_check():
-    """Запуск полной проверки здоровья системы."""
-    checks = {
-        "Database": check_database(),
-        "Redis": check_redis(),
-        "Celery Workers": check_celery_workers(),
-    }
+    all_ok = db_ok and redis_ok
+    message = f"DB: {db_msg} | Redis: {redis_msg}"
     
-    all_ok = all(status for status, _ in checks.values())
-    
-    message_parts = ["🏥 **Health Check**\n"]
-    for component, (status, msg) in checks.items():
-        icon = "✅" if status else "❌"
-        message_parts.append(f"{icon} **{component}**: {msg}")
-    
-    message = "\n".join(message_parts)
-    
-    if not all_ok:
-        notify_admin.delay(text=message, category='health_check')
-    
+    if all_ok:
+        logger.info("Health check passed.")
+    else:
+        logger.warning(f"Health check failed: {message}")
+
     return all_ok, message
+
+if __name__ == '__main__':
+    import asyncio
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    all_ok, message = asyncio.run(run_health_check())
+    print(f"Health Check Status: {'OK' if all_ok else 'FAILED'}")
+    print(f"Details: {message}")

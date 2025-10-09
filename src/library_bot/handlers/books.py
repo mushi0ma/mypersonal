@@ -25,11 +25,11 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
     user = context.user_data['current_user']
 
     try:
-        with get_db_connection() as conn:
-            selected_book = db_data.get_book_by_id(conn, book_id)
+        async with get_db_connection() as conn:
+            selected_book = await db_data.get_book_by_id(conn, book_id)
 
             if selected_book['available_quantity'] > 0:
-                borrowed_books = db_data.get_borrowed_books(conn, user['id'])
+                borrowed_books = await db_data.get_borrowed_books(conn, user['id'])
                 from src.library_bot.utils import get_user_borrow_limit
                 borrow_limit = get_user_borrow_limit(user['status'])
 
@@ -37,8 +37,8 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
                     await query.answer(f"⚠️ Вы достигли лимита ({borrow_limit}) на заимствование.", show_alert=True)
                     return State.USER_MENU
 
-                due_date = db_data.borrow_book(conn, user['id'], selected_book['id'])
-                db_data.log_activity(conn, user_id=user['id'], action="borrow_book", details=f"Book ID: {selected_book['id']}")
+                due_date = await db_data.borrow_book(conn, user['id'], selected_book['id'])
+                await db_data.log_activity(conn, user_id=user['id'], action="borrow_book", details=f"Book ID: {selected_book['id']}")
 
                 due_date_str = due_date.strftime('%d.%m.%Y')
                 notification_text = f"✅ Вы успешно взяли книгу «{selected_book['name']}».\n\nПожалуйста, верните ее до **{due_date_str}**."
@@ -46,7 +46,8 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
 
                 await query.edit_message_text("👍 Отлично! Подтверждение отправлено вам в бот-уведомитель.")
                 from src.library_bot.handlers.user_menu import user_menu
-                return await user_menu(update, context)
+                await user_menu(update, context)
+                return State.USER_MENU
 
             else:
                 context.user_data['book_to_reserve'] = selected_book
@@ -63,7 +64,8 @@ async def process_borrow_selection(update: Update, context: ContextTypes.DEFAULT
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка в `librarybot`**: `{e}`", category='error')
         await query.edit_message_text("❌ Непредвиденная ошибка. Мы уже работаем над этим.")
         from src.library_bot.handlers.user_menu import user_menu
-        return await user_menu(update, context)
+        await user_menu(update, context)
+        return State.USER_MENU
 
 async def process_reservation_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Обрабатывает решение о резервации."""
@@ -73,27 +75,29 @@ async def process_reservation_decision(update: Update, context: ContextTypes.DEF
     if not book_to_reserve:
         await query.edit_message_text("❌ Ошибка сессии. Попробуйте снова.")
         from src.library_bot.handlers.user_menu import user_menu
-        return await user_menu(update, context)
+        await user_menu(update, context)
+        return State.USER_MENU
 
     if query.data == 'reserve_yes':
         user_id = context.user_data['current_user']['id']
-        with get_db_connection() as conn:
-            result = db_data.add_reservation(conn, user_id, book_to_reserve['id'])
-            db_data.log_activity(conn, user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}")
+        async with get_db_connection() as conn:
+            result = await db_data.add_reservation(conn, user_id, book_to_reserve['id'])
+            await db_data.log_activity(conn, user_id=user_id, action="reserve_book", details=f"Book ID: {book_to_reserve['id']}")
         await query.edit_message_text(f"👍 {result}")
     else:
         await query.edit_message_text("👌 Действие отменено.")
 
     from src.library_bot.handlers.user_menu import user_menu
-    return await user_menu(update, context)
+    await user_menu(update, context)
+    return State.USER_MENU
 
 async def start_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Начинает процесс возврата книги."""
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    with get_db_connection() as conn:
-        borrowed_books = db_data.get_borrowed_books(conn, user_id)
+    async with get_db_connection() as conn:
+        borrowed_books = await db_data.get_borrowed_books(conn, user_id)
 
     if not borrowed_books:
         await query.answer("✅ У вас нет книг на руках.", show_alert=True)
@@ -113,13 +117,14 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not borrowed_info:
         await query.edit_message_text("❌ Ошибка выбора. Попробуйте снова.")
         from src.library_bot.handlers.user_menu import user_menu
-        return await user_menu(update, context)
+        await user_menu(update, context)
+        return State.USER_MENU
 
     user_id = context.user_data['current_user']['id']
     try:
-        with get_db_connection() as conn:
-            db_data.return_book(conn, borrowed_info['borrow_id'], borrowed_info['book_id'])
-            db_data.log_activity(conn, user_id=user_id, action="return_book", details=f"Book ID: {borrowed_info['book_id']}")
+        async with get_db_connection() as conn:
+            await db_data.return_book(conn, borrowed_info['borrow_id'], borrowed_info['book_id'])
+            await db_data.log_activity(conn, user_id=user_id, action="return_book", details=f"Book ID: {borrowed_info['book_id']}")
 
             # Уведомляем пользователя и предлагаем оценить
             tasks.notify_user.delay(
@@ -131,7 +136,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
 
             # Проверяем резервации
-            reservations = db_data.get_reservations_for_book(conn, borrowed_info['book_id'])
+            reservations = await db_data.get_reservations_for_book(conn, borrowed_info['book_id'])
             if reservations:
                 next_user_id = reservations[0]
                 tasks.notify_user.delay(
@@ -141,7 +146,7 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
                     button_text="📥 Взять книгу",
                     button_callback=f"borrow_book_{borrowed_info['book_id']}"
                 )
-                db_data.update_reservation_status(conn, next_user_id, borrowed_info['book_id'], notified=True)
+                await db_data.update_reservation_status(conn, next_user_id, borrowed_info['book_id'], notified=True)
 
         await query.edit_message_text(f"✅ Книга «{borrowed_info['book_name']}» возвращена. Подтверждение отправлено в бот-уведомитель.")
     except Exception as e:
@@ -151,7 +156,8 @@ async def process_return_book(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     context.user_data.pop('borrowed_map', None)
     from src.library_bot.handlers.user_menu import user_menu
-    return await user_menu(update, context)
+    await user_menu(update, context)
+    return State.USER_MENU
 
 # --- Обработчики оценки книг ---
 
@@ -160,8 +166,8 @@ async def start_rate_book(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
-    with get_db_connection() as conn:
-        history = db_data.get_user_borrow_history(conn, user_id)
+    async with get_db_connection() as conn:
+        history = await db_data.get_user_borrow_history(conn, user_id)
 
     unique_books = {item['book_id']: item for item in history if item.get('book_id')}.values()
     if not unique_books:
@@ -187,15 +193,16 @@ async def select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, from
 
     if from_notification:
         book_id = int(query.data.split('_')[2])
-        with get_db_connection() as conn:
-            book_info_raw = db_data.get_book_by_id(conn, book_id)
+        async with get_db_connection() as conn:
+            book_info_raw = await db_data.get_book_by_id(conn, book_id)
         context.user_data['book_to_rate'] = {'book_id': book_id, 'book_name': book_info_raw['name']}
     else:
         book_info = context.user_data.get('rating_map', {}).get(query.data)
         if not book_info:
             await query.edit_message_text("❌ Ошибка выбора.")
             from src.library_bot.handlers.user_menu import user_menu
-            return await user_menu(update, context)
+            await user_menu(update, context)
+            return State.USER_MENU
         context.user_data['book_to_rate'] = book_info
 
     book_name = context.user_data['book_to_rate']['book_name']
@@ -212,16 +219,17 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = context.user_data['current_user']['id']
     book_info = context.user_data.pop('book_to_rate')
 
-    with get_db_connection() as conn:
-        db_data.add_rating(conn, user_id, book_info['book_id'], rating)
-        db_data.log_activity(conn, user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
+    async with get_db_connection() as conn:
+        await db_data.add_rating(conn, user_id, book_info['book_id'], rating)
+        await db_data.log_activity(conn, user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
 
     tasks.notify_user.delay(user_id=user_id, text=f"👍 Спасибо! Ваша оценка «{rating}» для книги «{book_info['book_name']}» сохранена.", category='confirmation')
     await query.edit_message_text("✅ Спасибо за вашу оценку!")
 
     context.user_data.pop('rating_map', None)
     from src.library_bot.handlers.user_menu import user_menu
-    return await user_menu(update, context)
+    await user_menu(update, context)
+    return State.USER_MENU
 
 async def process_book_extension(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Обрабатывает продление срока возврата книги."""
@@ -229,8 +237,8 @@ async def process_book_extension(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     borrow_id = int(query.data.split('_')[2])
 
-    with get_db_connection() as conn:
-        result = db_data.extend_due_date(conn, borrow_id)
+    async with get_db_connection() as conn:
+        result = await db_data.extend_due_date(conn, borrow_id)
 
     if isinstance(result, datetime):
         await query.edit_message_text(f"✅ Срок возврата продлен до **{result.strftime('%d.%m.%Y')}**.", parse_mode='Markdown')
@@ -238,7 +246,8 @@ async def process_book_extension(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text(f"⚠️ {result}")
 
     from src.library_bot.handlers.user_menu import user_menu
-    return await user_menu(update, context)
+    await user_menu(update, context)
+    return State.USER_MENU
 
 # --- Обработчики поиска и просмотра ---
 
@@ -275,13 +284,16 @@ async def navigate_search_results(update: Update, context: ContextTypes.DEFAULT_
     if not search_term:
         await query.edit_message_text("❌ Ошибка: поисковый запрос потерян. Попробуйте снова.")
         from src.library_bot.handlers.user_menu import user_menu
-        return await user_menu(update, context)
+        await user_menu(update, context)
+        return State.USER_MENU
 
-    with get_db_connection() as conn:
-        books, total = db_data.search_available_books(conn, search_term, limit=5, offset=page * 5)
+    async with get_db_connection() as conn:
+        books, total = await db_data.search_available_books(conn, search_term, limit=5, offset=page * 5)
 
     if total == 0:
          await query.edit_message_text(f"😔 По запросу «{search_term}» ничего не найдено.")
+         from src.library_bot.handlers.user_menu import user_menu
+         await user_menu(update, context)
          return State.USER_MENU
 
     message_text = f"🔎 Результаты по запросу «{search_term}» (Стр. {page + 1}):"
@@ -302,8 +314,8 @@ async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
     book_id = int(query.data.split('_')[2])
 
-    with get_db_connection() as conn:
-        book = db_data.get_book_card_details(conn, book_id)
+    async with get_db_connection() as conn:
+        book = await db_data.get_book_card_details(conn, book_id)
 
     message_parts = [
         f"**📖 {book['name']}**", f"**Автор:** {book['author']}", f"**Жанр:** {book['genre']}",
@@ -330,8 +342,8 @@ async def show_top_books(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Показывает топ книг по рейтингу."""
     query = update.callback_query
     await query.answer()
-    with get_db_connection() as conn:
-        top_books = db_data.get_top_rated_books(conn, limit=5)
+    async with get_db_connection() as conn:
+        top_books = await db_data.get_top_rated_books(conn, limit=5)
 
     message_parts = ["**🏆 Топ-5 книг по оценкам читателей:**\n"]
     if top_books:
@@ -346,15 +358,15 @@ async def show_top_books(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
     await query.edit_message_text("\n".join(message_parts), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-    return State.VIEWING_TOP_BOOKS
+    return State.USER_MENU # Было VIEWING_TOP_BOOKS, но такого стейта нет
 
 @rate_limit(seconds=1)
 async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Показывает пользователю список жанров."""
     query = update.callback_query
     await query.answer()
-    with get_db_connection() as conn:
-        genres = db_data.get_unique_genres(conn)
+    async with get_db_connection() as conn:
+        genres = await db_data.get_unique_genres(conn)
 
     if not genres:
         await query.edit_message_text("😔 В каталоге пока нет книг с указанием жанра.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]))
@@ -376,10 +388,9 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
     books_per_page = 5
     offset = page * books_per_page
 
-    with get_db_connection() as conn:
-        books, total_books = db_data.get_available_books_by_genre(conn, genre, limit=books_per_page, offset=offset)
+    async with get_db_connection() as conn:
+        books, total_books = await db_data.get_available_books_by_genre(conn, genre, limit=books_per_page, offset=offset)
 
-    # ✅ Инициализируем keyboard сразу
     keyboard = []
 
     if total_books == 0:
@@ -390,20 +401,16 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
             message_parts.append(f"• *{book['name']}* ({book['author']})")
         message_text = "\n".join(message_parts)
 
-        # Добавляем кнопки для книг
-        for i, book in enumerate(books, start=1):
-            status_icon = "✅" # В этой функции мы ищем только доступные книги
-            button_text = f"{status_icon} {book['name']} ({book['author']})"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"view_book_{book['id']}")])
+        for book in books:
+            keyboard.append([InlineKeyboardButton(f"✅ {book['name']} ({book['author']})", callback_data=f"view_book_{book['id']}")])
 
-    # --- Кнопки навигации ---
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"genre_{genre}_{page - 1}"))
     if (page + 1) * books_per_page < total_books:
         nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"genre_{genre}_{page + 1}"))
 
-    if nav_buttons:  # ✅ Добавляем только если есть кнопки навигации
+    if nav_buttons:
         keyboard.append(nav_buttons)
 
     keyboard.append([InlineKeyboardButton("⬅️ К выбору жанра", callback_data="find_by_genre")])
@@ -421,8 +428,8 @@ async def show_authors_list(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     context.user_data['current_authors_page'] = page
 
-    with get_db_connection() as conn:
-        authors, total = db_data.get_all_authors_paginated(conn, limit=10, offset=page * 10)
+    async with get_db_connection() as conn:
+        authors, total = await db_data.get_all_authors_paginated(conn, limit=10, offset=page * 10)
 
     if not authors:
         await query.edit_message_text("📚 В библиотеке пока нет авторов.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]))
@@ -452,9 +459,9 @@ async def show_author_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     author_id = int(parts[2])
     books_page = int(parts[3]) if len(parts) > 3 else 0
 
-    with get_db_connection() as conn:
-        author = db_data.get_author_details(conn, author_id)
-        books, total_books = db_data.get_books_by_author(conn, author_id, limit=5, offset=books_page * 5)
+    async with get_db_connection() as conn:
+        author = await db_data.get_author_details(conn, author_id)
+        books, total_books = await db_data.get_books_by_author(conn, author_id, limit=5, offset=books_page * 5)
 
     message_parts = [
         f"👤 **{author['name']}**",

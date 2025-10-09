@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 import logging
-from .utils import hash_password, get_db_connection
-from datetime import datetime
-import psycopg2
+from .utils import hash_password
+from datetime import datetime, timedelta
+import asyncpg
 import uuid
 
 # Настройка логирования
@@ -21,170 +21,127 @@ class UserExistsError(DatabaseError):
     """Ошибка, когда пользователь уже существует."""
     pass
 
+# --- Вспомогательные функции для преобразования ---
+def _record_to_dict(record: asyncpg.Record | None) -> dict | None:
+    return dict(record) if record else None
+
+def _records_to_list_of_dicts(records: list[asyncpg.Record]) -> list[dict]:
+    return [dict(r) for r in records]
+
 # ==============================================================================
 # --- Функции для работы с ПОЛЬЗОВАТЕЛЯМИ (Users) ---
 # ==============================================================================
 
-def add_user(conn, data: dict):
-    """
-    Добавляет нового пользователя.
-    telegram_id и telegram_username могут быть None (заполняются позже).
-    """
+async def add_user(conn: asyncpg.Connection, data: dict) -> int:
+    """Добавляет нового пользователя."""
     hashed_pass = hash_password(data['password'])
-    with conn.cursor() as cur:
-        try:
-            cur.execute(
-                """
-                INSERT INTO users (
-                    username, telegram_id, telegram_username, 
-                    full_name, dob, contact_info, status, 
-                    password_hash, registration_date
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-                """,
-                (
-                    data['username'], 
-                    data.get('telegram_id'),  # ✅ Может быть None
-                    data.get('telegram_username'),  # ✅ Может быть None
-                    data['full_name'], 
-                    data['dob'], 
-                    data['contact_info'], 
-                    data['status'], 
-                    hashed_pass, 
-                    datetime.now()
-                )
-            )
-            user_id = cur.fetchone()[0]
-            return user_id
-        except psycopg2.IntegrityError:
-            conn.rollback()
-            raise UserExistsError("Пользователь с таким контактом или именем пользователя уже существует.")
-        except psycopg2.Error as e:
-            conn.rollback()
-            raise DatabaseError(f"Не удалось добавить пользователя: {e}")
-
-def get_user_by_login(conn, login_query: str):
-    """Ищет пользователя по УНИКАЛЬНОМУ полю: username, contact_info или telegram_username."""
-    with conn.cursor() as cur:
-        cur.execute(
+    try:
+        user_id = await conn.fetchval(
             """
-            SELECT id, full_name, contact_info, status, password_hash, telegram_id, telegram_username, username
-            FROM users
-            WHERE username = %s OR contact_info = %s OR telegram_username = %s
+            INSERT INTO users (username, telegram_id, telegram_username, full_name, dob, contact_info, status, password_hash, registration_date)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id;
             """,
-            (login_query, login_query, login_query)
+            data['username'], data.get('telegram_id'), data.get('telegram_username'),
+            data['full_name'], data['dob'], data['contact_info'], data['status'],
+            hashed_pass, datetime.now()
         )
-        row = cur.fetchone()
-        if not row:
-            raise NotFoundError("Пользователь с таким логином не найден.")
-        columns = [desc[0] for desc in cur.description]
-        return dict(zip(columns, row))
+        return user_id
+    except asyncpg.IntegrityConstraintViolationError:
+        raise UserExistsError("Пользователь с таким контактом или именем пользователя уже существует.")
+    except asyncpg.PostgresError as e:
+        raise DatabaseError(f"Не удалось добавить пользователя: {e}")
 
-def get_user_by_id(conn, user_id: int):
+async def get_user_by_login(conn: asyncpg.Connection, login_query: str) -> dict:
+    """Ищет пользователя по username, contact_info или telegram_username."""
+    row = await conn.fetchrow(
+        "SELECT * FROM users WHERE username = $1 OR contact_info = $1 OR telegram_username = $1",
+        login_query
+    )
+    if not row:
+        raise NotFoundError("Пользователь с таким логином не найден.")
+    return _record_to_dict(row)
+
+async def get_user_by_id(conn: asyncpg.Connection, user_id: int) -> dict:
     """Возвращает все данные одного пользователя по его ID."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
-        row = cur.fetchone()
-        if not row:
-            raise NotFoundError("Пользователь с таким ID не найден.")
-        columns = [desc[0] for desc in cur.description]
-        return dict(zip(columns, row))
+    row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+    if not row:
+        raise NotFoundError("Пользователь с таким ID не найден.")
+    return _record_to_dict(row)
 
-def get_all_users(conn, limit: int, offset: int):
+async def get_all_users(conn: asyncpg.Connection, limit: int, offset: int) -> tuple[list, int]:
     """Возвращает порцию пользователей для постраничной навигации и общее количество."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM users")
-        total_users = cur.fetchone()[0]
-        cur.execute(
-            "SELECT id, username, full_name, registration_date, dob FROM users ORDER BY registration_date DESC LIMIT %s OFFSET %s",
-            (limit, offset)
-        )
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in rows], total_users
+    total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+    rows = await conn.fetch(
+        "SELECT id, username, full_name, registration_date, dob FROM users ORDER BY registration_date DESC LIMIT $1 OFFSET $2",
+        limit, offset
+    )
+    return _records_to_list_of_dicts(rows), total_users or 0
 
-def get_all_user_ids(conn):
+async def get_all_user_ids(conn: asyncpg.Connection) -> list[int]:
     """Возвращает список всех ID пользователей, привязавших Telegram."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE telegram_id IS NOT NULL")
-        return [item[0] for item in cur.fetchall()]
+    records = await conn.fetch("SELECT id FROM users WHERE telegram_id IS NOT NULL")
+    return [item['id'] for item in records]
 
-def get_user_profile(conn, user_id: int):
+async def get_user_profile(conn: asyncpg.Connection, user_id: int) -> dict:
     """Получает данные для карточки профиля пользователя."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT username, full_name, telegram_username, status, contact_info, registration_date, dob FROM users WHERE id = %s", (user_id,))
-        row = cur.fetchone()
-        if not row:
-            raise NotFoundError("Профиль пользователя не найден.")
-        columns = [desc[0] for desc in cur.description]
-        return dict(zip(columns, row))
+    row = await conn.fetchrow("SELECT username, full_name, telegram_username, status, contact_info, registration_date, dob FROM users WHERE id = $1", user_id)
+    if not row:
+        raise NotFoundError("Профиль пользователя не найден.")
+    return _record_to_dict(row)
 
-def update_user_password(conn, login_query: str, new_password: str):
+async def update_user_password(conn: asyncpg.Connection, login_query: str, new_password: str):
     """Обновляет пароль пользователя по логину."""
     hashed_pass = hash_password(new_password)
-    with conn.cursor() as cur:
-        cur.execute("UPDATE users SET password_hash = %s WHERE username = %s OR contact_info = %s", (hashed_pass, login_query, login_query))
-        if cur.rowcount == 0:
-            raise NotFoundError("Пользователь для обновления пароля не найден.")
+    result = await conn.execute("UPDATE users SET password_hash = $1 WHERE username = $2 OR contact_info = $2", hashed_pass, login_query)
+    if int(result.split()[-1]) == 0:
+        raise NotFoundError("Пользователь для обновления пароля не найден.")
 
-def update_user_password_by_id(conn, user_id: int, new_password: str):
+async def update_user_password_by_id(conn: asyncpg.Connection, user_id: int, new_password: str):
     """Обновляет пароль пользователя по его ID."""
     hashed_pass = hash_password(new_password)
-    with conn.cursor() as cur:
-        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hashed_pass, user_id))
-        if cur.rowcount == 0:
-            raise NotFoundError("Пользователь не найден для обновления пароля.")
+    result = await conn.execute("UPDATE users SET password_hash = $1 WHERE id = $2", hashed_pass, user_id)
+    if int(result.split()[-1]) == 0:
+        raise NotFoundError("Пользователь не найден для обновления пароля.")
 
-def update_user_full_name(conn, user_id: int, new_name: str):
+async def update_user_full_name(conn: asyncpg.Connection, user_id: int, new_name: str):
     """Обновляет ФИО пользователя."""
-    with conn.cursor() as cur:
-        cur.execute("UPDATE users SET full_name = %s WHERE id = %s", (new_name, user_id))
-        if cur.rowcount == 0:
-            raise NotFoundError("Пользователь не найден для обновления ФИО.")
+    result = await conn.execute("UPDATE users SET full_name = $1 WHERE id = $2", new_name, user_id)
+    if int(result.split()[-1]) == 0:
+        raise NotFoundError("Пользователь не найден для обновления ФИО.")
 
-def update_user_contact(conn, user_id: int, new_contact: str):
+async def update_user_contact(conn: asyncpg.Connection, user_id: int, new_contact: str):
     """Обновляет контактную информацию пользователя."""
-    with conn.cursor() as cur:
-        try:
-            cur.execute("UPDATE users SET contact_info = %s WHERE id = %s", (new_contact, user_id))
-            if cur.rowcount == 0:
-                raise NotFoundError("Пользователь не найден для обновления контакта.")
-        except psycopg2.IntegrityError:
-            conn.rollback()
-            raise UserExistsError("Этот контакт уже используется другим пользователем.")
+    try:
+        result = await conn.execute("UPDATE users SET contact_info = $1 WHERE id = $2", new_contact, user_id)
+        if int(result.split()[-1]) == 0:
+            raise NotFoundError("Пользователь не найден для обновления контакта.")
+    except asyncpg.IntegrityConstraintViolationError:
+        raise UserExistsError("Этот контакт уже используется другим пользователем.")
 
-def delete_user_by_admin(conn, user_id: int):
+async def delete_user_by_admin(conn: asyncpg.Connection, user_id: int):
     """Анонимизирует пользователя (выполняется администратором)."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT book_id FROM borrowed_books WHERE user_id = %s AND return_date IS NULL", (user_id,))
-        book_ids_to_return = [item[0] for item in cur.fetchall()]
-        if book_ids_to_return:
-            for book_id in book_ids_to_return:
-                cur.execute("UPDATE books SET available_quantity = available_quantity + 1 WHERE id = %s", (book_id,))
-        cur.execute("UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE user_id = %s AND return_date IS NULL", (user_id,))
+    async with conn.transaction():
+        book_ids_records = await conn.fetch("SELECT book_id FROM borrowed_books WHERE user_id = $1 AND return_date IS NULL", user_id)
+        if book_ids_records:
+            book_ids = [(r['book_id'],) for r in book_ids_records]
+            await conn.executemany("UPDATE books SET available_quantity = available_quantity + 1 WHERE id = $1", book_ids)
+        await conn.execute("UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE user_id = $1 AND return_date IS NULL", user_id)
         anonymized_username = f"deleted_user_{user_id}"
-        cur.execute(
-            """
-            UPDATE users SET username = %s, full_name = '(удален админом)', contact_info = %s,
-            password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL
-            WHERE id = %s
-            """, (anonymized_username, anonymized_username, user_id)
+        await conn.execute(
+            "UPDATE users SET username = $1, full_name = '(удален админом)', contact_info = $2, password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL WHERE id = $3",
+            anonymized_username, anonymized_username, user_id
         )
 
-def delete_user_by_self(conn, user_id: int):
+async def delete_user_by_self(conn: asyncpg.Connection, user_id: int) -> str:
     """Анонимизирует пользователя по его собственной просьбе."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM borrowed_books WHERE user_id = %s AND return_date IS NULL", (user_id,))
-        if cur.fetchone():
+    async with conn.transaction():
+        has_books = await conn.fetchval("SELECT 1 FROM borrowed_books WHERE user_id = $1 AND return_date IS NULL", user_id)
+        if has_books:
             return "У вас есть невозвращенные книги. Удаление невозможно."
         anonymized_username = f"deleted_user_{user_id}"
-        cur.execute(
-            """
-            UPDATE users SET username = %s, full_name = '(удален)', contact_info = %s,
-            password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL
-            WHERE id = %s
-            """, (anonymized_username, anonymized_username, user_id)
+        await conn.execute(
+            "UPDATE users SET username = $1, full_name = '(удален)', contact_info = $2, password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL WHERE id = $3",
+            anonymized_username, anonymized_username, user_id
         )
         return "Аккаунт успешно удален (анонимизирован)."
 
@@ -192,588 +149,322 @@ def delete_user_by_self(conn, user_id: int):
 # --- Функции для привязки Telegram (Регистрация) ---
 # ==============================================================================
 
-def set_registration_code(conn, user_id: int) -> str:
+async def set_registration_code(conn: asyncpg.Connection, user_id: int) -> str:
     """Генерирует, сохраняет и возвращает уникальный код регистрации для пользователя."""
     code = str(uuid.uuid4())
-    with conn.cursor() as cur:
-        cur.execute("UPDATE users SET registration_code = %s WHERE id = %s", (code, user_id))
+    await conn.execute("UPDATE users SET registration_code = $1 WHERE id = $2", code, user_id)
     return code
 
-def link_telegram_id_by_code(conn, code: str, telegram_id: int, telegram_username: str):
+async def link_telegram_id_by_code(conn: asyncpg.Connection, code: str, telegram_id: int, telegram_username: str):
     """Находит пользователя по коду регистрации и обновляет его telegram_id."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE users SET telegram_id = %s, telegram_username = %s WHERE registration_code = %s RETURNING id",
-            (telegram_id, telegram_username, code)
-        )
-        if cur.fetchone() is None:
-            raise NotFoundError("Пользователь с таким кодом регистрации не найден.")
+    res = await conn.fetchval("UPDATE users SET telegram_id = $1, telegram_username = $2 WHERE registration_code = $3 RETURNING id", telegram_id, telegram_username, code)
+    if res is None:
+        raise NotFoundError("Пользователь с таким кодом регистрации не найден.")
 
-def get_telegram_id_by_user_id(conn, user_id: int):
+async def get_telegram_id_by_user_id(conn: asyncpg.Connection, user_id: int) -> int:
     """Возвращает telegram_id пользователя по его внутреннему id."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT telegram_id FROM users WHERE id = %s", (user_id,))
-        row = cur.fetchone()
-        if row and row[0]:
-            return row[0]
+    tid = await conn.fetchval("SELECT telegram_id FROM users WHERE id = $1", user_id)
+    if not tid:
         raise NotFoundError(f"Telegram ID для пользователя с ID {user_id} не найден.")
+    return tid
 
 # ==============================================================================
 # --- Функции для работы с КНИГАМИ (Books & Authors) ---
 # ==============================================================================
 
-def get_or_create_author(conn, author_name: str) -> int:
+async def get_or_create_author(conn: asyncpg.Connection, author_name: str) -> int:
     """Находит автора по имени или создает нового. Возвращает ID автора."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM authors WHERE name = %s", (author_name,))
-        row = cur.fetchone()
-        if row:
-            return row[0]
-        else:
-            cur.execute("INSERT INTO authors (name) VALUES (%s) RETURNING id", (author_name,))
-            return cur.fetchone()[0]
+    async with conn.transaction():
+        author_id = await conn.fetchval("SELECT id FROM authors WHERE name = $1", author_name)
+        if author_id:
+            return author_id
+        return await conn.fetchval("INSERT INTO authors (name) VALUES ($1) RETURNING id", author_name)
 
-def add_new_book(conn, book_data: dict):
+async def add_new_book(conn: asyncpg.Connection, book_data: dict) -> int:
     """Добавляет новую книгу, находя или создавая автора."""
-    author_id = get_or_create_author(conn, book_data['author'])
-    book_data['author_id'] = author_id
-    book_data.setdefault('total_quantity', 1)
-    book_data.setdefault('available_quantity', 1)
-    
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO books (name, author_id, genre, description, cover_image_id, total_quantity, available_quantity)
-            VALUES (%(name)s, %(author_id)s, %(genre)s, %(description)s, %(cover_image_id)s, %(total_quantity)s, %(available_quantity)s)
-            RETURNING id;
-            """, book_data
-        )
-        return cur.fetchone()[0]
+    author_id = await get_or_create_author(conn, book_data['author'])
+    return await conn.fetchval(
+        "INSERT INTO books (name, author_id, genre, description, cover_image_id, total_quantity, available_quantity) VALUES ($1, $2, $3, $4, $5, $6, $6) RETURNING id",
+        book_data['name'], author_id, book_data['genre'], book_data['description'],
+        book_data.get('cover_image_id'), book_data.get('total_quantity', 1)
+    )
 
-def get_book_by_id(conn, book_id: int):
+async def get_book_by_id(conn: asyncpg.Connection, book_id: int) -> dict:
     """Ищет одну книгу по её ID для базовых операций."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.id, b.name, a.name as author_name, b.available_quantity
-            FROM books b JOIN authors a ON b.author_id = a.id WHERE b.id = %s
-            """, (book_id,)
-        )
-        row = cur.fetchone()
-        if not row:
-            raise NotFoundError("Книга с таким ID не найдена.")
-        columns = [desc[0] for desc in cur.description]
-        return dict(zip(columns, row))
+    row = await conn.fetchrow("SELECT b.id, b.name, a.name as author_name, b.available_quantity FROM books b JOIN authors a ON b.author_id = a.id WHERE b.id = $1", book_id)
+    if not row:
+        raise NotFoundError("Книга с таким ID не найдена.")
+    return _record_to_dict(row)
 
-def get_all_books_paginated(conn, limit: int, offset: int):
+async def get_all_books_paginated(conn: asyncpg.Connection, limit: int, offset: int) -> tuple[list, int]:
     """Возвращает порцию книг для админ-панели и их общее количество."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM books")
-        total_books = cur.fetchone()[0]
-        cur.execute(
-            """
-            SELECT b.id, b.name, CASE WHEN bb.borrow_id IS NOT NULL THEN TRUE ELSE FALSE END AS is_borrowed
-            FROM books b
-            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
-            ORDER BY b.name LIMIT %s OFFSET %s
-            """, (limit, offset)
-        )
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in rows], total_books
+    total_books = await conn.fetchval("SELECT COUNT(*) FROM books")
+    rows = await conn.fetch(
+        """
+        SELECT b.id, b.name, a.name as author, b.available_quantity > 0 as is_available
+        FROM books b JOIN authors a ON b.author_id = a.id
+        ORDER BY b.name LIMIT $1 OFFSET $2
+        """, limit, offset
+    )
+    return _records_to_list_of_dicts(rows), total_books or 0
 
-def get_book_details(conn, book_id: int):
+async def get_book_details(conn: asyncpg.Connection, book_id: int) -> dict | None:
     """Возвращает детальную информацию о книге для админа (включая текущего владельца)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.id, b.name, a.name as author, b.genre, b.description, b.cover_image_id,
-                   u.id as user_id, u.username, bb.borrow_date
-            FROM books b
-            LEFT JOIN authors a ON b.author_id = a.id
-            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
-            LEFT JOIN users u ON bb.user_id = u.id
-            WHERE b.id = %s
-            """, (book_id,)
-        )
-        row = cur.fetchone()
-        if not row:
-            return None
-        columns = [desc[0] for desc in cur.description]
-        return dict(zip(columns, row))
+    row = await conn.fetchrow(
+        """
+        SELECT b.id, b.name, a.name as author, b.genre, b.description, b.cover_image_id, u.id as user_id, u.username, bb.borrow_date
+        FROM books b
+        LEFT JOIN authors a ON b.author_id = a.id
+        LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
+        LEFT JOIN users u ON bb.user_id = u.id
+        WHERE b.id = $1
+        """, book_id
+    )
+    return _record_to_dict(row)
 
-def get_book_card_details(conn, book_id: int):
+async def get_book_card_details(conn: asyncpg.Connection, book_id: int) -> dict:
     """Возвращает все данные для карточки книги (для пользователя), включая статус доступности."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM borrowed_books WHERE book_id = %s AND return_date IS NULL", (book_id,))
-        is_borrowed = cur.fetchone() is not None
-        cur.execute(
-            """
-            SELECT b.id, b.name, a.name as author, b.genre, b.description, b.cover_image_id
-            FROM books b JOIN authors a ON b.author_id = a.id WHERE b.id = %s
-            """, (book_id,)
-        )
-        row = cur.fetchone()
-        if not row:
-            raise NotFoundError("Книга с таким ID не найдена.")
-        columns = [desc[0] for desc in cur.description]
-        book_details = dict(zip(columns, row))
-        book_details['is_available'] = not is_borrowed
-        return book_details
+    book_details = await conn.fetchrow(
+        """
+        SELECT b.id, b.name, a.name as author, b.genre, b.description, b.cover_image_id, (b.available_quantity > 0) as is_available
+        FROM books b JOIN authors a ON b.author_id = a.id WHERE b.id = $1
+        """, book_id
+    )
+    if not book_details:
+        raise NotFoundError("Книга с таким ID не найдена.")
+    return _record_to_dict(book_details)
 
-def update_book_field(conn, book_id: int, field: str, value: str):
+async def update_book_field(conn: asyncpg.Connection, book_id: int, field: str, value: str):
     """Обновляет указанное поле для указанной книги (безопасно)."""
-    # Маппинг разрешенных полей
-    ALLOWED_FIELDS = {
-        "name": "name",
-        "author": "author_id",  # Обрабатывается отдельно
-        "genre": "genre",
-        "description": "description"
-    }
-    
-    if field not in ALLOWED_FIELDS:
-        raise ValueError(f"Недопустимое поле: {field}")
-    
-    with conn.cursor() as cur:
-        if field == 'author':
-            author_id = get_or_create_author(conn, value)
-            cur.execute(
-                "UPDATE books SET author_id = %s WHERE id = %s",
-                (author_id, book_id)
-            )
-        else:
-            # Используем psycopg2.sql для безопасного построения запроса
-            from psycopg2 import sql
-            query = sql.SQL("UPDATE books SET {} = %s WHERE id = %s").format(
-                sql.Identifier(ALLOWED_FIELDS[field])
-            )
-            cur.execute(query, (value, book_id))
+    ALLOWED_FIELDS = ["name", "genre", "description"]
+    if field == 'author':
+        author_id = await get_or_create_author(conn, value)
+        await conn.execute("UPDATE books SET author_id = $1 WHERE id = $2", author_id, book_id)
+    elif field in ALLOWED_FIELDS:
+        # Использование f-string здесь безопасно, так как `field` проверяется по белому списку
+        query = f"UPDATE books SET {field} = $1 WHERE id = $2"
+        await conn.execute(query, value, book_id)
+    else:
+        raise ValueError(f"Недопустимое поле для обновления: {field}")
 
-def delete_book(conn, book_id: int):
+async def delete_book(conn: asyncpg.Connection, book_id: int):
     """Удаляет книгу и все связанные с ней записи (благодаря ON DELETE CASCADE)."""
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM books WHERE id = %s", (book_id,))
+    await conn.execute("DELETE FROM books WHERE id = $1", book_id)
 
 # ==============================================================================
 # --- Функции для ПОИСКА КНИГ (Search) ---
 # ==============================================================================
 
-def get_unique_genres(conn):
+async def get_unique_genres(conn: asyncpg.Connection) -> list[str]:
     """Возвращает список всех уникальных жанров из таблицы книг."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT genre FROM books WHERE genre IS NOT NULL AND genre != '' ORDER BY genre")
-        return [row[0] for row in cur.fetchall()]
+    records = await conn.fetch("SELECT DISTINCT genre FROM books WHERE genre IS NOT NULL AND genre != '' ORDER BY genre")
+    return [row['genre'] for row in records]
 
-def get_available_books_by_genre(conn, genre: str, limit: int, offset: int):
-    """Возвращает порцию свободных книг по жанру (оптимизированная версия с LEFT JOIN)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT COUNT(b.id) FROM books b
-            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
-            WHERE b.genre = %s AND bb.borrow_id IS NULL;
-            """, (genre,)
-        )
-        total_books = cur.fetchone()[0]
-        cur.execute(
-            """
-            SELECT b.id, b.name, a.name as author FROM books b
-            JOIN authors a ON b.author_id = a.id
-            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
-            WHERE b.genre = %s AND bb.borrow_id IS NULL
-            ORDER BY b.name LIMIT %s OFFSET %s;
-            """, (genre, limit, offset)
-        )
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in rows], total_books
+async def get_available_books_by_genre(conn: asyncpg.Connection, genre: str, limit: int, offset: int) -> tuple[list, int]:
+    """Возвращает порцию свободных книг по жанру."""
+    total = await conn.fetchval("SELECT COUNT(*) FROM books WHERE genre = $1 AND available_quantity > 0", genre)
+    rows = await conn.fetch(
+        "SELECT b.id, b.name, a.name as author, (b.available_quantity > 0) as is_available FROM books b JOIN authors a ON b.author_id = a.id WHERE b.genre = $1 AND b.available_quantity > 0 ORDER BY b.name LIMIT $2 OFFSET $3",
+        genre, limit, offset
+    )
+    return _records_to_list_of_dicts(rows), total or 0
 
-def search_available_books(conn, search_term: str, limit: int, offset: int):
-    """Ищет доступные книги по названию или автору (с пагинацией и LEFT JOIN)."""
-    with conn.cursor() as cur:
-        search_pattern = f"%{search_term}%"
-        cur.execute(
-            """
-            SELECT COUNT(b.id) FROM books b 
-            JOIN authors a ON b.author_id = a.id 
-            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
-            WHERE (b.name ILIKE %s OR a.name ILIKE %s) AND bb.borrow_id IS NULL
-            """, (search_pattern, search_pattern)
-        )
-        total_books = cur.fetchone()[0]
-        cur.execute(
-            """
-            SELECT b.id, b.name, a.name as author FROM books b
-            JOIN authors a ON b.author_id = a.id
-            LEFT JOIN borrowed_books bb ON b.id = bb.book_id AND bb.return_date IS NULL
-            WHERE (b.name ILIKE %s OR a.name ILIKE %s) AND bb.borrow_id IS NULL
-            ORDER BY b.name LIMIT %s OFFSET %s
-            """, (search_pattern, search_pattern, limit, offset)
-        )
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in rows], total_books
+async def search_available_books(conn: asyncpg.Connection, search_term: str, limit: int, offset: int) -> tuple[list, int]:
+    """Ищет доступные книги по названию или автору."""
+    search_pattern = f"%{search_term}%"
+    total = await conn.fetchval(
+        "SELECT COUNT(b.id) FROM books b JOIN authors a ON b.author_id = a.id WHERE (b.name ILIKE $1 OR a.name ILIKE $1) AND b.available_quantity > 0",
+        search_pattern
+    )
+    rows = await conn.fetch(
+        "SELECT b.id, b.name, a.name as author FROM books b JOIN authors a ON b.author_id = a.id WHERE (b.name ILIKE $1 OR a.name ILIKE $1) AND b.available_quantity > 0 ORDER BY b.name LIMIT $2 OFFSET $3",
+        search_pattern, limit, offset
+    )
+    return _records_to_list_of_dicts(rows), total or 0
 
 # ==============================================================================
 # --- Функции для ВЗАИМОДЕЙСТВИЙ с книгами (Borrow, Return, Rate, etc.) ---
 # ==============================================================================
 
-def get_borrowed_books(conn, user_id: int):
+async def get_borrowed_books(conn: asyncpg.Connection, user_id: int) -> list[dict]:
     """Получает список книг, взятых пользователем."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT bb.borrow_id, b.id as book_id, b.name as book_name, a.name as author_name, bb.borrow_date
-            FROM borrowed_books bb
-            JOIN books b ON bb.book_id = b.id
-            JOIN authors a ON b.author_id = a.id
-            WHERE bb.user_id = %s AND bb.return_date IS NULL
-            """, (user_id,)
-        )
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+    rows = await conn.fetch(
+        """
+        SELECT bb.borrow_id, b.id as book_id, b.name as book_name, a.name as author_name, bb.borrow_date, bb.due_date
+        FROM borrowed_books bb JOIN books b ON bb.book_id = b.id JOIN authors a ON b.author_id = a.id
+        WHERE bb.user_id = $1 AND bb.return_date IS NULL
+        """, user_id
+    )
+    return _records_to_list_of_dicts(rows)
 
-def get_user_borrow_history(conn, user_id: int):
+async def get_user_borrow_history(conn: asyncpg.Connection, user_id: int) -> list[dict]:
     """Получает всю историю заимствований пользователя, включая его оценки."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.id as book_id, b.name as book_name, a.name as author_name,
-                   bb.borrow_date, bb.return_date, r.rating
-            FROM borrowed_books bb
-            JOIN books b ON bb.book_id = b.id
-            JOIN authors a ON b.author_id = a.id
-            LEFT JOIN ratings r ON bb.user_id = r.user_id AND bb.book_id = r.book_id
-            WHERE bb.user_id = %s ORDER BY bb.borrow_date DESC
-            """, (user_id,)
-        )
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+    rows = await conn.fetch(
+        """
+        SELECT b.id as book_id, b.name as book_name, a.name as author_name, bb.borrow_date, bb.return_date, r.rating
+        FROM borrowed_books bb JOIN books b ON bb.book_id = b.id JOIN authors a ON b.author_id = a.id
+        LEFT JOIN ratings r ON bb.user_id = r.user_id AND bb.book_id = r.book_id
+        WHERE bb.user_id = $1 ORDER BY bb.borrow_date DESC
+        """, user_id
+    )
+    return _records_to_list_of_dicts(rows)
 
-def borrow_book(conn, user_id: int, book_id: int):
+async def borrow_book(conn: asyncpg.Connection, user_id: int, book_id: int) -> datetime:
     """Обрабатывает взятие книги. Возвращает due_date."""
-    from datetime import date, timedelta
-    
-    with conn.cursor() as cur:
-        try:
-            # Блокируем строку для изменения
-            cur.execute(
-                "SELECT available_quantity FROM books WHERE id = %s FOR UPDATE",
-                (book_id,)
-            )
-            available = cur.fetchone()
-            
-            if not available or available[0] <= 0:
-                raise ValueError("Книга недоступна для взятия")
-            
-            # Уменьшаем количество
-            cur.execute(
-                "UPDATE books SET available_quantity = available_quantity - 1 WHERE id = %s",
-                (book_id,)
-            )
-            
-            # Создаем запись о займе
-            due_date = date.today() + timedelta(days=14)
-            cur.execute(
-                """
-                INSERT INTO borrowed_books (user_id, book_id, borrow_date, due_date)
-                VALUES (%s, %s, CURRENT_DATE, %s)
-                RETURNING due_date
-                """,
-                (user_id, book_id, due_date)
-            )
-            
-            return cur.fetchone()[0]
-            
-        except Exception as e:
-            conn.rollback()
-            logger.error(f"Ошибка при займе книги: {e}")
-            raise DatabaseError(f"Не удалось взять книгу: {e}")
+    async with conn.transaction():
+        available = await conn.fetchval("SELECT available_quantity FROM books WHERE id = $1 FOR UPDATE", book_id)
+        if not available or available <= 0:
+            raise ValueError("Книга недоступна для взятия")
+        await conn.execute("UPDATE books SET available_quantity = available_quantity - 1 WHERE id = $1", book_id)
+        due_date = datetime.now().date() + timedelta(days=14)
+        return await conn.fetchval(
+            "INSERT INTO borrowed_books (user_id, book_id, borrow_date, due_date) VALUES ($1, $2, CURRENT_DATE, $3) RETURNING due_date",
+            user_id, book_id, due_date
+        )
 
-def return_book(conn, borrow_id: int, book_id: int):
+async def return_book(conn: asyncpg.Connection, borrow_id: int, book_id: int) -> str:
     """Обрабатывает возврат книги."""
-    with conn.cursor() as cur:
-        cur.execute("UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE borrow_id = %s", (borrow_id,))
-        cur.execute("UPDATE books SET available_quantity = available_quantity + 1 WHERE id = %s", (book_id,))
-        return "Успешно"
+    async with conn.transaction():
+        await conn.execute("UPDATE borrowed_books SET return_date = CURRENT_DATE WHERE borrow_id = $1", borrow_id)
+        await conn.execute("UPDATE books SET available_quantity = available_quantity + 1 WHERE id = $1", book_id)
+    return "Успешно"
 
-def add_rating(conn, user_id: int, book_id: int, rating: int):
+async def add_rating(conn: asyncpg.Connection, user_id: int, book_id: int, rating: int):
     """Добавляет или обновляет оценку книги."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO ratings (user_id, book_id, rating) VALUES (%s, %s, %s) ON CONFLICT (user_id, book_id) DO UPDATE SET rating = EXCLUDED.rating;",
-            (user_id, book_id, rating)
-        )
+    await conn.execute(
+        "INSERT INTO ratings (user_id, book_id, rating) VALUES ($1, $2, $3) ON CONFLICT (user_id, book_id) DO UPDATE SET rating = EXCLUDED.rating",
+        user_id, book_id, rating
+    )
 
-def get_user_ratings(conn, user_id: int):
+async def get_user_ratings(conn: asyncpg.Connection, user_id: int) -> list[dict]:
     """Возвращает историю оценок пользователя (книга и оценка)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.name as book_name, r.rating FROM ratings r
-            JOIN books b ON r.book_id = b.id
-            WHERE r.user_id = %s ORDER BY b.name
-            """, (user_id,)
-        )
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in rows]
+    rows = await conn.fetch(
+        "SELECT b.name as book_name, r.rating FROM ratings r JOIN books b ON r.book_id = b.id WHERE r.user_id = $1 ORDER BY b.name",
+        user_id
+    )
+    return _records_to_list_of_dicts(rows)
 
-def get_top_rated_books(conn, limit: int = 5):
+async def get_top_rated_books(conn: asyncpg.Connection, limit: int = 5) -> list[dict]:
     """Возвращает список книг с самым высоким средним рейтингом (2+ оценки)."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT b.name, a.name as author, AVG(r.rating) as avg_rating, COUNT(r.rating) as votes
-            FROM ratings r
-            JOIN books b ON r.book_id = b.id
-            JOIN authors a ON b.author_id = a.id
-            GROUP BY b.id, a.name
-            HAVING COUNT(r.rating) >= 2
-            ORDER BY avg_rating DESC, votes DESC
-            LIMIT %s;
-            """, (limit,)
-        )
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+    rows = await conn.fetch(
+        """
+        SELECT b.name, a.name as author, AVG(r.rating) as avg_rating, COUNT(r.rating) as votes
+        FROM ratings r JOIN books b ON r.book_id = b.id JOIN authors a ON b.author_id = a.id
+        GROUP BY b.id, a.name HAVING COUNT(r.rating) >= 2
+        ORDER BY avg_rating DESC, votes DESC LIMIT $1
+        """, limit
+    )
+    return _records_to_list_of_dicts(rows)
 
-def extend_due_date(conn, borrow_id: int):
+async def extend_due_date(conn: asyncpg.Connection, borrow_id: int) -> datetime | str:
     """Продлевает срок возврата книги, если это возможно."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT book_id, extensions_count FROM borrowed_books WHERE borrow_id = %s", (borrow_id,))
-        borrow_info = cur.fetchone()
+    async with conn.transaction():
+        borrow_info = await conn.fetchrow("SELECT book_id, extensions_count FROM borrowed_books WHERE borrow_id = $1 FOR UPDATE", borrow_id)
         if not borrow_info:
             return "Запись о взятии книги не найдена."
-        book_id, extensions_count = borrow_info
-        if extensions_count >= 1:
+        if borrow_info['extensions_count'] >= 1:
             return "Вы уже продлевали эту книгу. Повторное продление невозможно."
-        cur.execute("SELECT 1 FROM reservations WHERE book_id = %s AND notified = FALSE", (book_id,))
-        if cur.fetchone():
+        has_reservation = await conn.fetchval("SELECT 1 FROM reservations WHERE book_id = $1 AND notified = FALSE", borrow_info['book_id'])
+        if has_reservation:
             return "Невозможно продлить: эту книгу уже зарезервировал другой читатель."
-        cur.execute(
-            "UPDATE borrowed_books SET due_date = due_date + INTERVAL '7 day', extensions_count = extensions_count + 1 WHERE borrow_id = %s RETURNING due_date;",
-            (borrow_id,)
+        return await conn.fetchval(
+            "UPDATE borrowed_books SET due_date = due_date + INTERVAL '7 day', extensions_count = extensions_count + 1 WHERE borrow_id = $1 RETURNING due_date",
+            borrow_id
         )
-        return cur.fetchone()[0]
 
 # ==============================================================================
 # --- Функции для УВЕДОМЛЕНИЙ и ЛОГОВ (Notifications & Logs) ---
 # ==============================================================================
 
-def add_reservation(conn, user_id, book_id):
+async def add_reservation(conn: asyncpg.Connection, user_id: int, book_id: int) -> str:
     """Добавляет запись о бронировании книги."""
-    with conn.cursor() as cur:
-        try:
-            cur.execute("INSERT INTO reservations (user_id, book_id) VALUES (%s, %s)", (user_id, book_id))
-            return "Книга успешно зарезервирована."
-        except psycopg2.IntegrityError:
-            conn.rollback()
-            return "Вы уже зарезервировали эту книгу."
+    try:
+        await conn.execute("INSERT INTO reservations (user_id, book_id) VALUES ($1, $2)", user_id, book_id)
+        return "Книга успешно зарезервирована."
+    except asyncpg.IntegrityConstraintViolationError:
+        return "Вы уже зарезервировали эту книгу."
 
-def get_reservations_for_book(conn, book_id):
+async def get_reservations_for_book(conn: asyncpg.Connection, book_id: int) -> list[int]:
     """Получает ID пользователей, зарезервировавших книгу."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT user_id FROM reservations WHERE book_id = %s AND notified = FALSE ORDER BY reservation_date", (book_id,))
-        return [item[0] for item in cur.fetchall()]
+    records = await conn.fetch("SELECT user_id FROM reservations WHERE book_id = $1 AND notified = FALSE ORDER BY reservation_date", book_id)
+    return [r['user_id'] for r in records]
 
-def update_reservation_status(conn, user_id, book_id, notified: bool):
+async def update_reservation_status(conn: asyncpg.Connection, user_id: int, book_id: int, notified: bool):
     """Обновляет статус уведомления для брони."""
-    with conn.cursor() as cur:
-        cur.execute("UPDATE reservations SET notified = %s WHERE user_id = %s AND book_id = %s AND notified = FALSE", (notified, user_id, book_id))
+    await conn.execute("UPDATE reservations SET notified = $1 WHERE user_id = $2 AND book_id = $3 AND notified = FALSE", notified, user_id, book_id)
 
-def create_notification(conn, user_id: int, text: str, category: str):
+async def create_notification(conn: asyncpg.Connection, user_id: int, text: str, category: str):
     """Сохраняет новое уведомление для пользователя в базу данных."""
-    with conn.cursor() as cur:
-        cur.execute("INSERT INTO notifications (user_id, text, category) VALUES (%s, %s, %s)", (user_id, text, category))
+    await conn.execute("INSERT INTO notifications (user_id, text, category) VALUES ($1, $2, $3)", user_id, text, category)
 
-def get_notifications_for_user(conn, user_id: int, limit: int = 20):
+async def get_notifications_for_user(conn: asyncpg.Connection, user_id: int, limit: int = 20) -> list[dict]:
     """Возвращает последние уведомления для пользователя."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT text, category, created_at, is_read FROM notifications WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
-            (user_id, limit)
-        )
-        rows = cur.fetchall()
-        if not rows:
-            raise NotFoundError("Уведомлений для этого пользователя не найдено.")
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in rows]
+    rows = await conn.fetch("SELECT text, category, created_at, is_read FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2", user_id, limit)
+    if not rows:
+        raise NotFoundError("Уведомлений для этого пользователя не найдено.")
+    return _records_to_list_of_dicts(rows)
 
-def log_activity(conn, user_id: int, action: str, details: str = None):
+async def log_activity(conn: asyncpg.Connection, user_id: int, action: str, details: str = None):
     """Записывает действие пользователя в журнал активности."""
-    with conn.cursor() as cur:
-        cur.execute("INSERT INTO activity_log (user_id, action, details) VALUES (%s, %s, %s)", (user_id, action, details))
+    await conn.execute("INSERT INTO activity_log (user_id, action, details) VALUES ($1, $2, $3)", user_id, action, details)
 
-def get_user_activity(conn, user_id: int, limit: int, offset: int):
+async def get_user_activity(conn: asyncpg.Connection, user_id: int, limit: int, offset: int) -> tuple[list, int]:
     """Возвращает порцию логов активности для пользователя и их общее количество."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) FROM activity_log WHERE user_id = %s", (user_id,))
-        total_logs = cur.fetchone()[0]
-        cur.execute(
-            "SELECT action, details, timestamp FROM activity_log WHERE user_id = %s ORDER BY timestamp DESC LIMIT %s OFFSET %s",
-            (user_id, limit, offset)
-        )
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in rows], total_logs
+    total = await conn.fetchval("SELECT COUNT(*) FROM activity_log WHERE user_id = $1", user_id)
+    rows = await conn.fetch("SELECT action, details, timestamp FROM activity_log WHERE user_id = $1 ORDER BY timestamp DESC LIMIT $2 OFFSET $3", user_id, limit, offset)
+    return _records_to_list_of_dicts(rows), total or 0
 
-def get_users_with_overdue_books(conn):
+async def get_users_with_overdue_books(conn: asyncpg.Connection) -> list[dict]:
     """Возвращает пользователей с просроченными книгами."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT u.id as user_id, u.username, b.name as book_name, bb.due_date
-            FROM borrowed_books bb
-            JOIN users u ON bb.user_id = u.id
-            JOIN books b ON bb.book_id = b.id
-            WHERE bb.return_date IS NULL AND bb.due_date < CURRENT_DATE
-            """
-        )
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
-    
-def get_users_with_books_due_soon(conn, days_ahead: int = 2):
+    rows = await conn.fetch("""
+        SELECT u.id as user_id, u.username, b.name as book_name, bb.due_date
+        FROM borrowed_books bb JOIN users u ON bb.user_id = u.id JOIN books b ON bb.book_id = b.id
+        WHERE bb.return_date IS NULL AND bb.due_date < CURRENT_DATE
+    """)
+    return _records_to_list_of_dicts(rows)
+
+async def get_users_with_books_due_soon(conn: asyncpg.Connection, days_ahead: int = 2) -> list[dict]:
     """Возвращает пользователей, у которых срок возврата истекает через 'days_ahead' дней."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT u.id as user_id, b.name as book_name, bb.due_date, bb.borrow_id
-            FROM borrowed_books bb
-            JOIN users u ON bb.user_id = u.id
-            JOIN books b ON bb.book_id = b.id
-            WHERE bb.return_date IS NULL AND bb.due_date = CURRENT_DATE + INTERVAL '%s day'
-            """, (days_ahead,)
-        )
-        columns = [desc[0] for desc in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
-    
-def get_all_authors_paginated(conn, limit: int, offset: int):
-    """
-    Возвращает постраничный список авторов с количеством их книг.
-    
-    Returns:
-        tuple: (список авторов, общее количество)
-    """
-    with conn.cursor() as cur:
-        # Получаем общее количество авторов
-        cur.execute("SELECT COUNT(*) FROM authors")
-        total_authors = cur.fetchone()[0]
-        
-        # Получаем авторов с подсчетом книг
-        cur.execute(
-            """
-            SELECT 
-                a.id,
-                a.name,
-                COUNT(DISTINCT b.id) as books_count,
-                COUNT(DISTINCT CASE 
-                    WHEN NOT EXISTS (
-                        SELECT 1 FROM borrowed_books bb 
-                        WHERE bb.book_id = b.id AND bb.return_date IS NULL
-                    ) THEN b.id 
-                END) as available_books_count
-            FROM authors a
-            LEFT JOIN books b ON a.id = b.author_id
-            GROUP BY a.id, a.name
-            HAVING COUNT(DISTINCT b.id) > 0
-            ORDER BY a.name
-            LIMIT %s OFFSET %s
-            """, (limit, offset)
-        )
-        
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        authors = [dict(zip(columns, row)) for row in rows]
-        
-        return authors, total_authors
+    rows = await conn.fetch("""
+        SELECT u.id as user_id, b.name as book_name, bb.due_date, bb.borrow_id
+        FROM borrowed_books bb JOIN users u ON bb.user_id = u.id JOIN books b ON bb.book_id = b.id
+        WHERE bb.return_date IS NULL AND bb.due_date = CURRENT_DATE + make_interval(days => $1)
+    """, days_ahead)
+    return _records_to_list_of_dicts(rows)
 
+async def get_all_authors_paginated(conn: asyncpg.Connection, limit: int, offset: int) -> tuple[list, int]:
+    """Возвращает постраничный список авторов с количеством их книг."""
+    total = await conn.fetchval("SELECT COUNT(*) FROM authors a JOIN books b ON a.id = b.author_id")
+    rows = await conn.fetch("""
+        SELECT a.id, a.name, COUNT(b.id) as books_count,
+               SUM(CASE WHEN b.available_quantity > 0 THEN 1 ELSE 0 END) as available_books_count
+        FROM authors a LEFT JOIN books b ON a.id = b.author_id
+        GROUP BY a.id, a.name HAVING COUNT(b.id) > 0
+        ORDER BY a.name LIMIT $1 OFFSET $2
+    """, limit, offset)
+    return _records_to_list_of_dicts(rows), total or 0
 
-def get_author_details(conn, author_id: int):
-    """
-    Возвращает детальную информацию об авторе.
-    
-    Args:
-        author_id: ID автора
-        
-    Returns:
-        dict: Информация об авторе
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT 
-                a.id,
-                a.name,
-                COUNT(DISTINCT b.id) as total_books,
-                COUNT(DISTINCT CASE 
-                    WHEN NOT EXISTS (
-                        SELECT 1 FROM borrowed_books bb 
-                        WHERE bb.book_id = b.id AND bb.return_date IS NULL
-                    ) THEN b.id 
-                END) as available_books_count
-            FROM authors a
-            LEFT JOIN books b ON a.id = b.author_id
-            WHERE a.id = %s
-            GROUP BY a.id, a.name
-            """, (author_id,)
-        )
-        
-        row = cur.fetchone()
-        if not row:
-            raise NotFoundError("Автор не найден.")
-        
-        columns = [desc[0] for desc in cur.description]
-        return dict(zip(columns, row))
+async def get_author_details(conn: asyncpg.Connection, author_id: int) -> dict:
+    """Возвращает детальную информацию об авторе."""
+    row = await conn.fetchrow("""
+        SELECT a.id, a.name, COUNT(b.id) as total_books,
+               SUM(CASE WHEN b.available_quantity > 0 THEN 1 ELSE 0 END) as available_books_count
+        FROM authors a LEFT JOIN books b ON a.id = b.author_id
+        WHERE a.id = $1 GROUP BY a.id, a.name
+    """, author_id)
+    if not row:
+        raise NotFoundError("Автор не найден.")
+    return _record_to_dict(row)
 
-
-def get_books_by_author(conn, author_id: int, limit: int = 10, offset: int = 0):
-    """
-    Возвращает книги конкретного автора с пагинацией.
-    
-    Args:
-        author_id: ID автора
-        limit: Количество книг на страницу
-        offset: Смещение для пагинации
-        
-    Returns:
-        tuple: (список книг, общее количество книг автора)
-    """
-    with conn.cursor() as cur:
-        # Получаем общее количество книг автора
-        cur.execute(
-            "SELECT COUNT(*) FROM books WHERE author_id = %s",
-            (author_id,)
-        )
-        total_books = cur.fetchone()[0]
-        
-        # Получаем книги с информацией о доступности и рейтинге
-        cur.execute(
-            """
-            SELECT 
-                b.id,
-                b.name,
-                b.genre,
-                b.description,
-                CASE 
-                    WHEN EXISTS (
-                        SELECT 1 FROM borrowed_books bb 
-                        WHERE bb.book_id = b.id AND bb.return_date IS NULL
-                    ) THEN FALSE
-                    ELSE TRUE
-                END as is_available,
-                AVG(r.rating) as avg_rating,
-                COUNT(r.rating) as ratings_count
-            FROM books b
-            LEFT JOIN ratings r ON b.id = r.book_id
-            WHERE b.author_id = %s
-            GROUP BY b.id, b.name, b.genre, b.description
-            ORDER BY b.name
-            LIMIT %s OFFSET %s
-            """, (author_id, limit, offset)
-        )
-        
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-        books = [dict(zip(columns, row)) for row in rows]
-        
-        return books, total_books
+async def get_books_by_author(conn: asyncpg.Connection, author_id: int, limit: int = 10, offset: int = 0) -> tuple[list, int]:
+    """Возвращает книги конкретного автора с пагинацией."""
+    total = await conn.fetchval("SELECT COUNT(*) FROM books WHERE author_id = $1", author_id)
+    rows = await conn.fetch("""
+        SELECT b.id, b.name, b.genre, b.description, (b.available_quantity > 0) as is_available,
+               AVG(r.rating) as avg_rating, COUNT(r.rating) as ratings_count
+        FROM books b LEFT JOIN ratings r ON b.id = r.book_id
+        WHERE b.author_id = $1
+        GROUP BY b.id, b.name, b.genre, b.description
+        ORDER BY b.name LIMIT $2 OFFSET $3
+    """, author_id, limit, offset)
+    return _records_to_list_of_dicts(rows), total or 0
