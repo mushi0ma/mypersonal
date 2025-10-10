@@ -142,7 +142,7 @@ async def main() -> None:
     logger.info("Основной бот инициализирован и готов к запуску...")
     
     # Запускаем бота асинхронно
-    await application.run_async()
+    await application.run_polling()
 
 
 if __name__ == "__main__":

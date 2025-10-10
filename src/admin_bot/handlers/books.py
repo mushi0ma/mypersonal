@@ -249,6 +249,7 @@ add_book_handler = ConversationHandler(
         AdminState.CONFIRM_ADD: [CallbackQueryHandler(add_book_save, pattern="^add_book_save_"), CallbackQueryHandler(add_book_cancel, pattern="^add_book_cancel$")]
     },
     fallbacks=[CallbackQueryHandler(show_books_list, pattern="^books_page_0$")], # Fallback to the book list
+    per_message=False,
 )
 
 edit_book_handler = ConversationHandler(
@@ -258,4 +259,5 @@ edit_book_handler = ConversationHandler(
         AdminState.UPDATING_BOOK_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_book_update)],
     },
     fallbacks=[CallbackQueryHandler(cancel_edit, pattern="^cancel_edit$")],
+    per_message=False,
 )

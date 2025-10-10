@@ -326,5 +326,6 @@ edit_profile_handler = ConversationHandler(
         State.EDITING_PASSWORD_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_and_set_new_password)],
     },
     fallbacks=[CallbackQueryHandler(view_profile, pattern="^user_profile$")],
-    map_to_parent={ ConversationHandler.END: State.USER_MENU }
+    map_to_parent={ ConversationHandler.END: State.USER_MENU },
+    per_message=False,
 )
