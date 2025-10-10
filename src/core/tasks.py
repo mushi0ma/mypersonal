@@ -193,7 +193,8 @@ def backup_database():
     """Создает резервную копию базы данных PostgreSQL."""
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        backup_dir = os.getenv('BACKUP_DIR', '/backups')
+        # Путь для бэкапов внутри контейнера, доступный для appuser
+        backup_dir = os.getenv('BACKUP_DIR', '/app/backups')
         os.makedirs(backup_dir, exist_ok=True)
         filename = f"{backup_dir}/backup_{timestamp}.sql"
 

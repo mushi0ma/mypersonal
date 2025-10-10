@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Сервис базы данных PostgreSQL
   db:
@@ -29,6 +27,7 @@ services:
     command: python src/main.py
     volumes:
       - .:/app
+      - ./backups:/app/backups
     environment:
       - PYTHONPATH=/app
     env_file:
@@ -46,13 +45,16 @@ services:
     command: celery -A src.core.tasks.celery_app worker --loglevel=info
     volumes:
       - .:/app
+      - ./backups:/app/backups
     environment:
       - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
-      - redis
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   # Планировщик задач Celery Beat
   celery_beat:
@@ -66,8 +68,10 @@ services:
     env_file:
       - .env
     depends_on:
-      - redis
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
 volumes:
   postgres_data:

@@ -137,7 +137,7 @@ async def main() -> None:
     application = setup_notification_bot()
     
     # Запускаем бота асинхронно
-    await application.run_async()
+    await application.run_polling()
 
 if __name__ == "__main__":
     logger.warning(
