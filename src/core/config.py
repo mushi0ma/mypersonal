@@ -4,13 +4,14 @@ Configuration module - loads settings from environment variables.
 All sensitive data must be in .env file (which is in .gitignore)
 """
 import os
+import warnings
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
 # ==========================================
-# Telegram Bot Tokens
+# Telegram Bot Tokens (REQUIRED)
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_BOT_TOKEN = os.getenv('ADMIN_BOT_TOKEN')
@@ -27,7 +28,7 @@ except (ValueError, TypeError):
     ADMIN_TELEGRAM_ID = None
 
 # ==========================================
-# Database Configuration
+# Database Configuration (REQUIRED)
 # ==========================================
 DB_NAME = os.getenv('DB_NAME')
 DB_USER = os.getenv('DB_USER')
@@ -36,29 +37,41 @@ DB_HOST = os.getenv('DB_HOST', 'db')
 DB_PORT = os.getenv('DB_PORT', '5432')
 
 # ==========================================
-# Celery & Redis Configuration
+# Celery & Redis Configuration (REQUIRED)
 # ==========================================
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
 CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0')
 CELERY_TASK_ALWAYS_EAGER = os.getenv('CELERY_TASK_ALWAYS_EAGER', 'False').lower() in ('true', '1', 't')
 
 # ==========================================
-# Email Configuration (SendGrid)
+# Email Configuration - SendGrid (OPTIONAL)
 # ==========================================
 SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY')
 FROM_EMAIL = os.getenv('FROM_EMAIL')
 
+if not SENDGRID_API_KEY:
+    warnings.warn("⚠️  SendGrid API key not configured. Email features will be disabled.")
+
 # ==========================================
-# Twilio Configuration (if needed)
+# Twilio Configuration (OPTIONAL)
 # ==========================================
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+
+if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+    warnings.warn("⚠️  Twilio credentials not configured. SMS features will be disabled.")
+
+# ==========================================
+# Feature Flags (based on what's configured)
+# ==========================================
+EMAIL_ENABLED = bool(SENDGRID_API_KEY and FROM_EMAIL)
+SMS_ENABLED = bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN)
 
 # ==========================================
 # Validation Function
 # ==========================================
 def validate_config():
-    """Validates that all critical environment variables are set."""
+    """Validates that all CRITICAL environment variables are set."""
     required_vars = {
         "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
         "ADMIN_BOT_TOKEN": ADMIN_BOT_TOKEN,
@@ -78,8 +91,18 @@ def validate_config():
             f"Please check your .env file!"
         )
     
+    # Warnings for optional services
+    optional_warnings = []
+    if not EMAIL_ENABLED:
+        optional_warnings.append("📧 Email (SendGrid)")
+    if not SMS_ENABLED:
+        optional_warnings.append("📱 SMS (Twilio)")
+    
+    if optional_warnings:
+        print(f"⚠️  Optional services not configured: {', '.join(optional_warnings)}")
+    
     print("✅ All required environment variables are set!")
+    print(f"📊 Features: Email={EMAIL_ENABLED}, SMS={SMS_ENABLED}")
 
-# Call validation when this module is imported
-# Comment out if you want to validate manually
+# Uncomment to validate on import
 # validate_config()
