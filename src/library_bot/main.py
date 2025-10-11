@@ -142,7 +142,7 @@ async def main() -> None:
             CallbackQueryHandler(start.cancel, pattern="^cancel$")
         ],
         per_user=True,
-        per_chat=True
+        per_chat=True,
     )
 
     application.add_handler(conv_handler)

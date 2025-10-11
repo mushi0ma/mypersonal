@@ -250,7 +250,7 @@ add_book_handler = ConversationHandler(
     },
     fallbacks=[CallbackQueryHandler(show_books_list, pattern="^books_page_0$")],
     per_user=True,
-    per_chat=True
+    per_chat=True,
 )
 
 edit_book_handler = ConversationHandler(
@@ -261,5 +261,5 @@ edit_book_handler = ConversationHandler(
     },
     fallbacks=[CallbackQueryHandler(cancel_edit, pattern="^cancel_edit$")],
     per_chat=True,
-    per_user=True
+    per_user=True,
 )

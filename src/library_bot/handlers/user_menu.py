@@ -328,5 +328,5 @@ edit_profile_handler = ConversationHandler(
     fallbacks=[CallbackQueryHandler(view_profile, pattern="^user_profile$")],
     map_to_parent={ ConversationHandler.END: State.USER_MENU },
     per_user=True,
-    per_chat=True
+    per_chat=True,
 )
