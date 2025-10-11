@@ -265,47 +265,84 @@ async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> St
 @rate_limit(seconds=2)
 async def process_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Ищет книги и показывает первую страницу результатов."""
-    search_term = update.message.text
-    context.user_data['last_search_term'] = search_term
-
-    # Имитируем callback_query для навигации
-    from telegram import CallbackQuery
-    update.callback_query = CallbackQuery(id="dummy", from_user=update.effective_user, chat_instance="dummy", data="search_page_0")
+    context.user_data['last_search_term'] = update.message.text
+    context.user_data['current_search_page'] = 0
     await update.message.delete()
     return await navigate_search_results(update, context)
 
 async def navigate_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Обрабатывает навигацию по страницам результатов поиска."""
+    """
+    Отображает результаты поиска. Умеет работать в двух режимах:
+    1. После ввода текста (первый запуск).
+    2. После нажатия на кнопки навигации "вперед/назад".
+    """
     query = update.callback_query
-    await query.answer()
-    page = int(query.data.split('_')[2])
+    page = 0
+
+    # ШАГ 1: Определяем, как нас вызвали, и откуда брать номер страницы.
+    if query:
+        # СЦЕНАРИЙ А: Пользователь нажал на кнопку навигации.
+        # Получаем номер страницы из данных кнопки (e.g., "search_page_1").
+        await query.answer()
+        page = int(query.data.split('_')[2])
+    else:
+        # СЦЕНАРИЙ Б: Нас вызвали после ввода текста.
+        # Берём номер страницы из контекста.
+        page = context.user_data.get('current_search_page', 0)
+
+    # Поисковый запрос всегда берем из контекста - это самый надежный источник.
     search_term = context.user_data.get('last_search_term')
 
     if not search_term:
-        await query.edit_message_text("❌ Ошибка: поисковый запрос потерян. Попробуйте снова.")
+        error_message = "❌ Ошибка: поисковый запрос потерян. Попробуйте снова."
+        if query:
+            await query.edit_message_text(error_message)
+        else:
+            await context.bot.send_message(update.effective_chat.id, error_message)
+        # Возвращаем пользователя в главное меню
         from src.library_bot.handlers.user_menu import user_menu
-        await user_menu(update, context)
-        return State.USER_MENU
+        return await user_menu(update, context)
 
+    # ШАГ 2: Загружаем данные из БД (эта логика не меняется).
     async with get_db_connection() as conn:
         books, total = await db_data.search_available_books(conn, search_term, limit=5, offset=page * 5)
 
+    # Обработка случая, когда ничего не найдено
     if total == 0:
-         await query.edit_message_text(f"😔 По запросу «{search_term}» ничего не найдено.")
-         from src.library_bot.handlers.user_menu import user_menu
-         await user_menu(update, context)
-         return State.USER_MENU
+        not_found_message = f"😔 По запросу «{search_term}» ничего не найдено."
+        if query:
+            await query.edit_message_text(not_found_message)
+        else:
+            await context.bot.send_message(update.effective_chat.id, not_found_message)
+        # Возвращаем пользователя в главное меню
+        from src.library_bot.handlers.user_menu import user_menu
+        return await user_menu(update, context)
 
+    # ШАГ 3: Готовим сообщение и клавиатуру (эта логика не меняется).
     message_text = f"🔎 Результаты по запросу «{search_term}» (Стр. {page + 1}):"
-    keyboard = [[InlineKeyboardButton(f"📖 {b['name']} ({b['author']})", callback_data=f"view_book_{b['id']}")] for b in books]
+    keyboard_buttons = [[InlineKeyboardButton(f"📖 {b['name']} ({b['author']})", callback_data=f"view_book_{b['id']}")] for b in books]
 
-    nav = []
-    if page > 0: nav.append(InlineKeyboardButton("⬅️", callback_data=f"search_page_{page - 1}"))
-    if (page + 1) * 5 < total: nav.append(InlineKeyboardButton("➡️", callback_data=f"search_page_{page + 1}"))
-    if nav: keyboard.append(nav)
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"search_page_{page - 1}"))
+    if (page + 1) * 5 < total:
+        nav_buttons.append(InlineKeyboardButton("➡️", callback_data=f"search_page_{page + 1}"))
+    if nav_buttons:
+        keyboard_buttons.append(nav_buttons)
 
-    keyboard.append([InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")])
-    await query.edit_message_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard_buttons.append([InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard_buttons)
+
+    # ШАГ 4: Отправляем или редактируем сообщение в зависимости от сценария.
+    if query:
+        # Если была нажата кнопка - редактируем существующее сообщение.
+        await query.edit_message_text(message_text, reply_markup=reply_markup)
+    else:
+        # Если это был первый поиск текстом - отправляем новое сообщение.
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, text=message_text, reply_markup=reply_markup
+        )
+
     return State.SHOWING_SEARCH_RESULTS
 
 async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
