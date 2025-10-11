@@ -143,6 +143,7 @@ async def main() -> None:
         ],
         per_user=True,
         per_chat=True,
+        per_message=True
     )
 
     application.add_handler(conv_handler)

@@ -329,4 +329,5 @@ edit_profile_handler = ConversationHandler(
     map_to_parent={ ConversationHandler.END: State.USER_MENU },
     per_user=True,
     per_chat=True,
+    per_message=True
 )

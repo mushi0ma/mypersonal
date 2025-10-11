@@ -51,4 +51,5 @@ broadcast_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel_broadcast)],
     per_user=True,
     per_chat=True,
+    per_message=True
 )
