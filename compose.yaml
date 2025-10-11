@@ -1,0 +1,78 @@
+services:
+  # Сервис базы данных PostgreSQL
+  db:
+    image: postgres:14-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Сервис Redis для Celery
+  redis:
+    image: redis:6-alpine
+    restart: always
+
+  # --- ЕДИНЫЙ СЕРВИС ДЛЯ ЗАПУСКА ВСЕХ БОТОВ ---
+  bots:
+    build: .
+    restart: always
+    command: python src/main.py
+    volumes:
+      - .:/app
+      - ./backups:/backups
+      - ./src:/app/src
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Фоновый обработчик задач Celery
+  celery_worker:
+    build: .
+    restart: always
+    command: celery -A src.core.tasks.celery_app worker --loglevel=info
+    volumes:
+      - .:/app
+      - ./backups:/backups
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # Планировщик задач Celery Beat
+  celery_beat:
+    build: .
+    restart: always
+    command: celery -A src.core.tasks.celery_app beat --loglevel=info
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  postgres_data:

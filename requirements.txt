@@ -1,0 +1,9 @@
+python-telegram-bot
+asyncpg
+python-dotenv
+celery
+redis
+sendgrid
+twilio
+pytest
+pytest-asyncio
