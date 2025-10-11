@@ -95,6 +95,7 @@ async def main() -> None:
                 CallbackQueryHandler(books.show_authors_list, pattern="^show_authors$"),
                 user_menu.edit_profile_handler,
                 CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
+                CallbackQueryHandler(books.start_book_request, pattern="^request_book$"),
             ],
 
             # --- Работа с книгами ---
@@ -129,6 +130,18 @@ async def main() -> None:
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.show_authors_list, pattern="^authors_page_"),
                 CallbackQueryHandler(books.start_search, pattern="^search_book$"),
+            ],
+            State.BOOK_REQUEST_NAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_name)
+            ],
+            State.BOOK_REQUEST_AUTHOR: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_author)
+            ],
+            State.BOOK_REQUEST_GENRE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_genre)
+            ],
+            State.BOOK_REQUEST_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, books.confirm_book_request)
             ],
 
             # --- Удаление профиля ---

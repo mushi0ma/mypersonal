@@ -676,3 +676,101 @@ async def show_author_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     await query.edit_message_text("\n".join(message_parts), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
     return State.VIEWING_AUTHOR_CARD
+
+async def start_book_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+    """Начинает процесс запроса на добавление новой книги."""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['book_request'] = {}
+    
+    await query.edit_message_text(
+        "📝 **Запрос на добавление книги**\n\n"
+        "Если нужной книги нет в библиотеке, вы можете оставить запрос.\n\n"
+        "**Шаг 1/4:** Введите **название книги**:",
+        parse_mode='Markdown'
+    )
+    
+    return State.BOOK_REQUEST_NAME
+
+
+async def get_book_request_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+    """Получает название запрашиваемой книги."""
+    context.user_data['book_request']['name'] = update.message.text
+    await update.message.reply_text(
+        "**Шаг 2/4:** Введите **автора книги**:",
+        parse_mode='Markdown'
+    )
+    return State.BOOK_REQUEST_AUTHOR
+
+
+async def get_book_request_author(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+    """Получает автора запрашиваемой книги."""
+    context.user_data['book_request']['author'] = update.message.text
+    await update.message.reply_text(
+        "**Шаг 3/4:** Введите **жанр** (или напишите 'пропустить'):",
+        parse_mode='Markdown'
+    )
+    return State.BOOK_REQUEST_GENRE
+
+
+async def get_book_request_genre(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+    """Получает жанр или пропускает."""
+    text = update.message.text
+    if text.lower() not in ['пропустить', 'skip']:
+        context.user_data['book_request']['genre'] = text
+    
+    await update.message.reply_text(
+        "**Шаг 4/4:** Введите краткое **описание** или причину, почему эта книга важна "
+        "(или напишите 'пропустить'):",
+        parse_mode='Markdown'
+    )
+    return State.BOOK_REQUEST_DESCRIPTION
+
+
+async def confirm_book_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждает и сохраняет запрос на книгу."""
+    text = update.message.text
+    if text.lower() not in ['пропустить', 'skip']:
+        context.user_data['book_request']['description'] = text
+    
+    request_data = context.user_data['book_request']
+    user_id = context.user_data['current_user']['id']
+    
+    try:
+        async with get_db_connection() as conn:
+            request_id = await db_data.create_book_request(conn, user_id, request_data)
+            await db_data.log_activity(
+                conn, user_id=user_id, action="book_request",
+                details=f"Requested: {request_data['name']}"
+            )
+        
+        # Уведомляем админа
+        tasks.notify_admin.delay(
+            text=(
+                f"📚 **Новый запрос на книгу**\n\n"
+                f"**ID запроса:** `{request_id}`\n"
+                f"**Книга:** {request_data['name']}\n"
+                f"**Автор:** {request_data['author']}\n"
+                f"**Жанр:** {request_data.get('genre', 'Не указан')}\n"
+                f"**Описание:** {request_data.get('description', 'Нет')}\n\n"
+                f"Используйте /requests для просмотра всех запросов."
+            ),
+            category='book_request'
+        )
+        
+        await update.message.reply_text(
+            "✅ **Запрос отправлен!**\n\n"
+            "Администратор рассмотрит ваш запрос. "
+            "Вы получите уведомление, когда книга появится в библиотеке.",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при создании запроса на книгу: {e}", exc_info=True)
+        await update.message.reply_text("❌ Произошла ошибка. Попробуйте позже.")
+    
+    context.user_data.pop('book_request', None)
+    from src.library_bot.handlers.user_menu import user_menu
+    await user_menu(update, context)
+    return ConversationHandler.END

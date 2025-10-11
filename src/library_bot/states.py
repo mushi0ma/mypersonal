@@ -45,6 +45,10 @@ class State(Enum):
     USER_RATE_BOOK_SELECT = auto()
     USER_RATE_BOOK_RATING = auto()
     USER_RESERVE_BOOK_CONFIRM = auto()
+    BOOK_REQUEST_NAME = auto()
+    BOOK_REQUEST_AUTHOR = auto()
+    BOOK_REQUEST_GENRE = auto()
+    BOOK_REQUEST_DESCRIPTION = auto()
 
     # --- Поиск ---
     SHOWING_GENRES = auto()

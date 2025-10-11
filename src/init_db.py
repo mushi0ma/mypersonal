@@ -59,6 +59,19 @@ SCHEMA_COMMANDS = (
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS book_requests (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        book_name VARCHAR(255) NOT NULL,
+        author_name VARCHAR(255) NOT NULL,
+        genre VARCHAR(100),
+        description TEXT,
+        status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        rejection_reason TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ratings (
         rating_id SERIAL PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -85,7 +98,18 @@ SCHEMA_COMMANDS = (
         details TEXT,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    """,
     """
+    CREATE TABLE IF NOT EXISTS book_copies (
+        id SERIAL PRIMARY KEY,
+        book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
+        serial_number VARCHAR(50) UNIQUE NOT NULL,
+        condition VARCHAR(50) DEFAULT 'good',
+        is_available BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+
 )
 
 async def initialize_database():

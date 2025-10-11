@@ -385,6 +385,64 @@ async def extend_due_date(conn: asyncpg.Connection, borrow_id: int) -> datetime 
             borrow_id
         )
 
+async def create_book_request(conn: asyncpg.Connection, user_id: int, request_data: dict) -> int:
+    """Создает запрос на добавление новой книги от пользователя."""
+    request_id = await conn.fetchval(
+        """
+        INSERT INTO book_requests (user_id, book_name, author_name, genre, description, status)
+        VALUES ($1, $2, $3, $4, $5, 'pending')
+        RETURNING id
+        """,
+        user_id,
+        request_data['name'],
+        request_data['author'],
+        request_data.get('genre'),
+        request_data.get('description')
+    )
+    return request_id
+
+
+async def get_pending_book_requests(conn: asyncpg.Connection) -> list[dict]:
+    """Получает все ожидающие запросы на книги."""
+    rows = await conn.fetch(
+        """
+        SELECT br.id, br.book_name, br.author_name, br.genre, br.description,
+               br.created_at, u.username, u.full_name, u.telegram_id
+        FROM book_requests br
+        JOIN users u ON br.user_id = u.id
+        WHERE br.status = 'pending'
+        ORDER BY br.created_at DESC
+        """
+    )
+    return _records_to_list_of_dicts(rows)
+
+
+async def approve_book_request(conn: asyncpg.Connection, request_id: int) -> dict:
+    """Одобряет запрос и возвращает данные для добавления книги."""
+    async with conn.transaction():
+        request_data = await conn.fetchrow(
+            "SELECT * FROM book_requests WHERE id = $1",
+            request_id
+        )
+        
+        if not request_data:
+            raise NotFoundError("Запрос не найден")
+        
+        await conn.execute(
+            "UPDATE book_requests SET status = 'approved' WHERE id = $1",
+            request_id
+        )
+        
+        return _record_to_dict(request_data)
+
+
+async def reject_book_request(conn: asyncpg.Connection, request_id: int, reason: str = None):
+    """Отклоняет запрос на книгу."""
+    await conn.execute(
+        "UPDATE book_requests SET status = 'rejected', rejection_reason = $1 WHERE id = $2",
+        reason, request_id
+    )
+
 # ==============================================================================
 # --- Функции для УВЕДОМЛЕНИЙ и ЛОГОВ (Notifications & Logs) ---
 # ==============================================================================

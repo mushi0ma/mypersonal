@@ -33,7 +33,7 @@ def get_notification_subscription_keyboard(bot_username: str, reg_code: str) -> 
 # --- Клавиатуры для главного меню ---
 
 def get_user_menu_keyboard() -> InlineKeyboardMarkup:
-    """Возвращает клавиатуру главного меню пользователя."""
+    """Главное меню с кнопкой запроса книги."""
     keyboard = [
         [
             InlineKeyboardButton("🔎 Поиск книг", callback_data="search_book"),
@@ -49,10 +49,13 @@ def get_user_menu_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("⭐ Оценить книгу", callback_data="user_rate"),
-            InlineKeyboardButton("📜 История", callback_data="user_history")
+            InlineKeyboardButton("📝 Запросить книгу", callback_data="request_book")
         ],
         [
-            InlineKeyboardButton("👤 Профиль", callback_data="user_profile"),
+            InlineKeyboardButton("📜 История", callback_data="user_history"),
+            InlineKeyboardButton("👤 Профиль", callback_data="user_profile")
+        ],
+        [
             InlineKeyboardButton("📬 Уведомления", callback_data="user_notifications")
         ],
         [

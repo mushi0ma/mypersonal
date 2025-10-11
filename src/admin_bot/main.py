@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 admin_filter = filters.User(user_id=config.ADMIN_TELEGRAM_ID)
 
 async def main() -> None:
+    from src.admin_bot.handlers import requests
     """Запускает админ-бота, собирая его из модулей."""
     application = (
         Application.builder()
@@ -47,6 +48,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("start", start.start, filters=admin_filter))
     application.add_handler(CommandHandler("stats", stats.show_stats_panel, filters=admin_filter))
     application.add_handler(CommandHandler("books", books.show_books_list, filters=admin_filter))
+    application.add_handler(CommandHandler("requests", requests.show_book_requests, filters=admin_filter))
 
     # --- Диалоги (ConversationHandlers) ---
     application.add_handler(broadcast.broadcast_handler)
@@ -68,6 +70,10 @@ async def main() -> None:
     application.add_handler(CallbackQueryHandler(books.ask_for_book_delete_confirmation, pattern="^admin_delete_book_"))
     application.add_handler(CallbackQueryHandler(books.process_book_delete, pattern="^admin_confirm_book_delete_"))
     application.add_handler(bulk_add_books_handler)
+    application.add_handler(CallbackQueryHandler(requests.show_book_requests, pattern="^view_requests$"))
+    application.add_handler(CallbackQueryHandler(requests.view_book_request, pattern="^view_request_"))
+    application.add_handler(CallbackQueryHandler(requests.approve_request_and_add_book, pattern="^approve_request_"))
+    application.add_handler(CallbackQueryHandler(requests.reject_book_request, pattern="^reject_request_"))
 
     logger.info("Админ-бот инициализирован и готов к запуску.")
     
