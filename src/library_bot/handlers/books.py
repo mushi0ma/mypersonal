@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 
 from src.core.db import data_access as db_data
 from src.core.db.utils import get_db_connection
@@ -211,8 +211,80 @@ async def select_rating(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     await query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
     return State.USER_RATE_BOOK_RATING
 
+async def handle_rate_from_notification(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
+    """
+    Обрабатывает переход на оценку книги из бота-уведомителя.
+    Проверяет авторизацию и направляет на оценку конкретной книги.
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    # Проверяем авторизацию
+    if not context.user_data.get('current_user'):
+        await query.edit_message_text(
+            "🔐 Для оценки книги необходимо войти в систему.\n\n"
+            "Пожалуйста, используйте команду /start в основном боте библиотеки.",
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+    
+    book_id = int(query.data.split('_')[2])
+    user_id = context.user_data['current_user']['id']
+    
+    try:
+        async with get_db_connection() as conn:
+            # Проверяем, что пользователь действительно брал эту книгу
+            history = await db_data.get_user_borrow_history(conn, user_id)
+            book_found = any(item['book_id'] == book_id for item in history)
+            
+            if not book_found:
+                await query.edit_message_text(
+                    "❌ Вы можете оценить только те книги, которые брали в библиотеке.",
+                    parse_mode='Markdown'
+                )
+                return ConversationHandler.END
+            
+            # Получаем информацию о книге
+            book_info = await db_data.get_book_card_details(conn, book_id)
+            
+        context.user_data['book_to_rate'] = {
+            'book_id': book_id,
+            'book_name': book_info['name']
+        }
+        
+        # Проверяем, есть ли уже оценка
+        async with get_db_connection() as conn:
+            existing_rating = await conn.fetchval(
+                "SELECT rating FROM ratings WHERE user_id = $1 AND book_id = $2",
+                user_id, book_id
+            )
+        
+        action_text = "изменить оценку" if existing_rating else "поставить оценку"
+        stars_text = f" (текущая: {'⭐' * existing_rating})" if existing_rating else ""
+        
+        message_text = (
+            f"⭐ Ваша оценка для книги **«{book_info['name']}»**{stars_text}:\n\n"
+            f"Выберите количество звезд (1-5):"
+        )
+        
+        reply_markup = keyboards.get_rating_keyboard(from_return=True)
+        await query.edit_message_text(
+            message_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return State.USER_RATE_BOOK_RATING
+        
+    except Exception as e:
+        logger.error(f"Ошибка при переходе на оценку из уведомления: {e}", exc_info=True)
+        await query.edit_message_text(
+            "❌ Произошла ошибка. Попробуйте оценить книгу через основное меню.",
+            parse_mode='Markdown'
+        )
+        return ConversationHandler.END
+
 async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Сохраняет оценку в БД."""
+    """Сохраняет оценку в БД с поддержкой обновления существующих оценок."""
     query = update.callback_query
     await query.answer()
     rating = int(query.data.split('_')[1])
@@ -220,11 +292,39 @@ async def process_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     book_info = context.user_data.pop('book_to_rate')
 
     async with get_db_connection() as conn:
+        # Проверяем существующую оценку
+        existing_rating = await conn.fetchval(
+            "SELECT rating FROM ratings WHERE user_id = $1 AND book_id = $2",
+            user_id, book_info['book_id']
+        )
+        
+        # Добавляем или обновляем оценку
         await db_data.add_rating(conn, user_id, book_info['book_id'], rating)
-        await db_data.log_activity(conn, user_id=user_id, action="rate_book", details=f"Book ID: {book_info['book_id']}, Rating: {rating}")
+        
+        action = "изменена" if existing_rating else "добавлена"
+        await db_data.log_activity(
+            conn, 
+            user_id=user_id, 
+            action=f"{'update' if existing_rating else 'add'}_rating",
+            details=f"Book ID: {book_info['book_id']}, Rating: {rating}"
+        )
 
-    tasks.notify_user.delay(user_id=user_id, text=f"👍 Спасибо! Ваша оценка «{rating}» для книги «{book_info['book_name']}» сохранена.", category='confirmation')
-    await query.edit_message_text("✅ Спасибо за вашу оценку!")
+    stars = '⭐' * rating
+    notification_text = (
+        f"✅ Ваша оценка **{action}**!\n\n"
+        f"📖 Книга: «{book_info['book_name']}»\n"
+        f"⭐ Оценка: {stars} ({rating}/5)"
+    )
+    
+    tasks.notify_user.delay(
+        user_id=user_id,
+        text=notification_text,
+        category='confirmation'
+    )
+    
+    await query.edit_message_text(
+        f"✅ Спасибо! Ваша оценка {stars} для книги «{book_info['book_name']}» {action}."
+    )
 
     context.user_data.pop('rating_map', None)
     from src.library_bot.handlers.user_menu import user_menu
@@ -376,26 +476,51 @@ async def show_book_card_user(update: Update, context: ContextTypes.DEFAULT_TYPE
     return State.SHOWING_SEARCH_RESULTS
 
 async def show_top_books(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Показывает топ книг по рейтингу."""
+    """Показывает топ книг по рейтингу с улучшенным форматированием."""
     query = update.callback_query
     await query.answer()
+    
     async with get_db_connection() as conn:
-        top_books = await db_data.get_top_rated_books(conn, limit=5)
+        top_books = await db_data.get_top_rated_books(conn, limit=10)
 
-    message_parts = ["**🏆 Топ-5 книг по оценкам читателей:**\n"]
-    if top_books:
-        for i, book in enumerate(top_books):
-            stars = "⭐" * round(float(book['avg_rating']))
-            message_parts.append(
-                f"{i+1}. **{book['name']}** - {book['author']}\n"
-                f"   Рейтинг: {stars} ({float(book['avg_rating']):.1f}/5.0 на основе {book['votes']} оценок)\n"
-            )
+    if not top_books:
+        message_text = (
+            "🏆 **Топ книг по оценкам читателей**\n\n"
+            "📚 Пока еще никто не оценил книги.\n"
+            "Станьте первым! Оцените прочитанную книгу через меню."
+        )
     else:
-        message_parts.append("_Пока недостаточно данных для рейтинга._")
+        message_parts = ["🏆 **Топ книг по оценкам читателей**\n"]
+        
+        for i, book in enumerate(top_books, 1):
+            avg_rating = float(book['avg_rating'])
+            full_stars = int(avg_rating)
+            half_star = "⭐" if (avg_rating - full_stars) >= 0.5 else ""
+            stars = "⭐" * full_stars + half_star
+            
+            votes_text = "оценка" if book['votes'] == 1 else "оценок" if book['votes'] < 5 else "оценок"
+            
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i}.")
+            
+            message_parts.append(
+                f"{medal} **{book['name']}**\n"
+                f"   _Автор:_ {book['author']}\n"
+                f"   {stars} **{avg_rating:.1f}**/5.0 ({book['votes']} {votes_text})\n"
+            )
+        
+        message_text = "\n".join(message_parts)
 
-    keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
-    await query.edit_message_text("\n".join(message_parts), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
-    return State.USER_MENU # Было VIEWING_TOP_BOOKS, но такого стейта нет
+    keyboard = [
+        [InlineKeyboardButton("🔍 Найти книгу из топа", callback_data="search_book")],
+        [InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]
+    ]
+    
+    await query.edit_message_text(
+        message_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    return State.USER_MENU
 
 @rate_limit(seconds=1)
 async def show_genres(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:

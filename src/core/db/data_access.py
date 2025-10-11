@@ -344,14 +344,27 @@ async def get_user_ratings(conn: asyncpg.Connection, user_id: int) -> list[dict]
     )
     return _records_to_list_of_dicts(rows)
 
-async def get_top_rated_books(conn: asyncpg.Connection, limit: int = 5) -> list[dict]:
-    """Возвращает список книг с самым высоким средним рейтингом (2+ оценки)."""
+async def get_top_rated_books(conn: asyncpg.Connection, limit: int = 10) -> list[dict]:
+    """
+    Возвращает список книг с самым высоким средним рейтингом.
+    Теперь включает книги с ОДНОЙ или более оценками.
+    """
     rows = await conn.fetch(
         """
-        SELECT b.name, a.name as author, AVG(r.rating) as avg_rating, COUNT(r.rating) as votes
-        FROM ratings r JOIN books b ON r.book_id = b.id JOIN authors a ON b.author_id = a.id
-        GROUP BY b.id, a.name HAVING COUNT(r.rating) >= 2
-        ORDER BY avg_rating DESC, votes DESC LIMIT $1
+        SELECT 
+            b.id,
+            b.name,
+            a.name as author,
+            AVG(r.rating)::NUMERIC(3,2) as avg_rating,
+            COUNT(r.rating) as votes,
+            b.cover_image_id
+        FROM ratings r 
+        JOIN books b ON r.book_id = b.id 
+        JOIN authors a ON b.author_id = a.id
+        GROUP BY b.id, a.name, b.name, b.cover_image_id
+        HAVING COUNT(r.rating) >= 1  -- Изменено с 2 на 1
+        ORDER BY avg_rating DESC, votes DESC 
+        LIMIT $1
         """, limit
     )
     return _records_to_list_of_dicts(rows)

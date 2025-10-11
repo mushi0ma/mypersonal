@@ -7,6 +7,7 @@ services:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Almaty
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -19,6 +20,8 @@ services:
   redis:
     image: redis:6-alpine
     restart: always
+    environment:
+    TZ: Asia/Almaty
 
   # --- ЕДИНЫЙ СЕРВИС ДЛЯ ЗАПУСКА ВСЕХ БОТОВ ---
   bots:
@@ -31,6 +34,7 @@ services:
       - ./src:/app/src
     environment:
       - PYTHONPATH=/app
+      - TZ=Asia/Almaty
     env_file:
       - .env
     depends_on:
@@ -49,6 +53,7 @@ services:
       - ./backups:/backups
     environment:
       - PYTHONPATH=/app
+      - TZ=Asia/Almaty
     env_file:
       - .env
     depends_on:
@@ -66,6 +71,7 @@ services:
       - .:/app
     environment:
       - PYTHONPATH=/app
+      - TZ=Asia/Almaty
     env_file:
       - .env
     depends_on:
