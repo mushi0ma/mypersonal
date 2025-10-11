@@ -7,7 +7,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from src.core.db import data_access as db_data
 from src.core.db.utils import get_db_connection
 from src.core import tasks
@@ -172,6 +172,127 @@ async def add_book_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     context.user_data.pop('new_book', None)
     await query.edit_message_text("👌 Добавление книги отменено.", reply_markup=None)
+    await show_books_list(update, context)
+    return ConversationHandler.END
+
+
+async def start_bulk_add_books(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
+    """Начинает процесс массового добавления книг."""
+    query = update.callback_query
+    await query.answer()
+    
+    instruction_text = (
+        "📚 **Массовое добавление книг**\n\n"
+        "Отправьте CSV файл со следующими колонками:\n"
+        "`name,author,genre,description,quantity`\n\n"
+        "**Пример файла:**\n"
+        "```\n"
+        "Война и мир,Лев Толстой,Роман,Описание книги,3\n"
+        "1984,Джордж Оруэлл,Антиутопия,Описание,2\n"
+        "```\n\n"
+        "📝 **Важно:**\n"
+        "• Первая строка должна быть заголовком\n"
+        "• Разделитель: запятая (,)\n"
+        "• Кодировка: UTF-8\n"
+        "• Если автор новый, он будет создан автоматически"
+    )
+    
+    keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="books_page_0")]]
+    
+    await query.edit_message_text(
+        instruction_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
+    
+    return AdminState.BULK_ADD_WAITING_FILE
+
+
+async def process_bulk_add_csv(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обрабатывает CSV файл с книгами."""
+    if not update.message.document:
+        await update.message.reply_text(
+            "❌ Пожалуйста, отправьте CSV файл."
+        )
+        return AdminState.BULK_ADD_WAITING_FILE
+    
+    document = update.message.document
+    
+    if not document.file_name.endswith('.csv'):
+        await update.message.reply_text(
+            "❌ Неверный формат файла. Ожидается .csv"
+        )
+        return AdminState.BULK_ADD_WAITING_FILE
+    
+    await update.message.reply_text("⏳ Обрабатываю файл...")
+    
+    try:
+        # Скачиваем файл
+        file = await context.bot.get_file(document.file_id)
+        file_content = await file.download_as_bytearray()
+        csv_text = file_content.decode('utf-8')
+        
+        # Парсим CSV
+        import csv
+        import io
+        
+        reader = csv.DictReader(io.StringIO(csv_text))
+        books_to_add = []
+        
+        for row in reader:
+            books_to_add.append({
+                'name': row['name'].strip(),
+                'author': row['author'].strip(),
+                'genre': row['genre'].strip(),
+                'description': row['description'].strip(),
+                'total_quantity': int(row['quantity'])
+            })
+        
+        # Добавляем книги в БД
+        added_count = 0
+        skipped_count = 0
+        errors = []
+        
+        async with get_db_connection() as conn:
+            for book_data in books_to_add:
+                try:
+                    await db_data.add_new_book(conn, book_data)
+                    added_count += 1
+                except Exception as e:
+                    skipped_count += 1
+                    errors.append(f"'{book_data['name']}': {str(e)[:50]}")
+        
+        # Формируем отчет
+        report_parts = [
+            "✅ **Импорт завершен**\n",
+            f"📥 **Добавлено книг:** {added_count}",
+            f"⚠️ **Пропущено:** {skipped_count}"
+        ]
+        
+        if errors:
+            report_parts.append("\n**Ошибки:**")
+            for error in errors[:5]:
+                report_parts.append(f"• {error}")
+            if len(errors) > 5:
+                report_parts.append(f"_...и еще {len(errors) - 5}_")
+        
+        tasks.notify_admin.delay(
+            text=f"📚 Массовый импорт: добавлено {added_count} книг, пропущено {skipped_count}.",
+            category='admin_action'
+        )
+        
+        await update.message.reply_text(
+            "\n".join(report_parts),
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при массовом добавлении книг: {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Ошибка обработки файла:\n`{str(e)}`",
+            parse_mode='Markdown'
+        )
+    
     await show_books_list(update, context)
     return ConversationHandler.END
 

@@ -18,3 +18,4 @@ class AdminState(Enum):
     GET_DESCRIPTION = auto()
     GET_COVER = auto()
     CONFIRM_ADD = auto()
+    BULK_ADD_WAITING_FILE = auto()

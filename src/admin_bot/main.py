@@ -5,11 +5,14 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     filters,
+    ConversationHandler,
+    MessageHandler
 )
 
 # --- Локальные импорты из новой структуры ---
 from src.core import config
 from src.admin_bot.handlers import stats, books, broadcast, start
+from src.admin_bot.states import AdminState
 
 # --- Настройка логгера ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -26,6 +29,18 @@ async def main() -> None:
         .connect_timeout(10)
         .read_timeout(20)
         .build()
+    )
+    
+    bulk_add_books_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(books.start_bulk_add_books, pattern="^admin_bulk_add_books$")],
+    states={
+        AdminState.BULK_ADD_WAITING_FILE: [
+            MessageHandler(filters.Document.ALL, books.process_bulk_add_csv)
+        ],
+    },
+    fallbacks=[CallbackQueryHandler(books.show_books_list, pattern="^books_page_0$")],
+    per_user=True,
+    per_chat=True
     )
 
     # --- Основные команды ---
@@ -52,6 +67,7 @@ async def main() -> None:
     application.add_handler(CallbackQueryHandler(books.show_book_details, pattern="^admin_view_book_"))
     application.add_handler(CallbackQueryHandler(books.ask_for_book_delete_confirmation, pattern="^admin_delete_book_"))
     application.add_handler(CallbackQueryHandler(books.process_book_delete, pattern="^admin_confirm_book_delete_"))
+    application.add_handler(bulk_add_books_handler)
 
     logger.info("Админ-бот инициализирован и готов к запуску.")
     

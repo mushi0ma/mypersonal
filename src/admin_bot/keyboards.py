@@ -43,7 +43,11 @@ def get_user_delete_confirmation_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
 def get_books_list_keyboard(books: list, total_books: int, page: int, books_per_page: int) -> InlineKeyboardMarkup:
     """Клавиатура для постраничного списка книг."""
-    keyboard = [[InlineKeyboardButton("➕ Добавить новую книгу", callback_data="admin_add_book_start")]]
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить одну книгу", callback_data="admin_add_book_start")],
+        [InlineKeyboardButton("📥 Массовый импорт (CSV)", callback_data="admin_bulk_add_books")]
+    ]
+    
     for book in books:
         status_icon = "🔴" if book.get('is_borrowed', False) else "🟢"
         button_text = f"{status_icon} {book['name']}"
