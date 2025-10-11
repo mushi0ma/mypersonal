@@ -79,34 +79,54 @@ async def show_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"❌ Ошибка: {e}")
 
 async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает детальную карточку пользователя."""
+    """Показывает детальную карточку пользователя для админа."""
     query = update.callback_query
     await query.answer()
     current_page = context.user_data.get('current_stats_page', 0)
     user_id = int(query.data.split('_')[3])
+    
     try:
         async with get_db_connection() as conn:
             user = await db_data.get_user_by_id(conn, user_id)
             borrow_history = await db_data.get_user_borrow_history(conn, user_id)
+            borrowed_now = await db_data.get_borrowed_books(conn, user_id)
 
         reg_date = user['registration_date'].strftime("%d.%m.%Y %H:%M")
         age = calculate_age(user.get('dob'))
+        
         message_parts = [
-            f"**👤 Карточка: `{user['username']}`**",
-            f"**ФИО:** {user['full_name']}",
-            f"**Возраст:** {age}",
-            f"**Статус:** {user['status']}",
-            f"**Регистрация:** {reg_date}\n",
-            "**📚 История взятых книг:**"
+            "👤 **Карточка пользователя** 👤",
+            "`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`",
+            f"🔹 **Имя:** `{user['full_name']}`",
+            f"🔹 **Username:** `{user['username']}`",
+            f"🔹 **Возраст:** `{age}`",
+            f"🔹 **Статус:** `{user['status']}`",
+            f"🔹 **Контакт:** `{user['contact_info']}`",
+            f"🔹 **Telegram ID:** `{user.get('telegram_id', 'Не привязан')}`",
+            f"🔹 **Telegram Username:** `@{user.get('telegram_username', 'Не указан')}`",
+            f"🔹 **Регистрация:** `{reg_date}`",
+            "`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`",
+            f"📚 **Книг на руках:** {len(borrowed_now)}",
         ]
+        
+        if borrowed_now:
+            for book in borrowed_now:
+                due_str = book['due_date'].strftime('%d.%m.%Y')
+                message_parts.append(f"  • `{book['book_name']}` (до {due_str})")
+        
+        message_parts.append(f"\n📖 **Всего взято книг:** {len(borrow_history)}")
+        
         if borrow_history:
-            for item in borrow_history:
-                message_parts.append(f" - `{item['book_name']}`")
-        else:
-            message_parts.append("  _Нет записей._")
+            message_parts.append("\n**История (последние 5):**")
+            for item in borrow_history[:5]:
+                message_parts.append(f"  • `{item['book_name']}`")
 
         reply_markup = keyboards.get_user_profile_keyboard(user_id, current_page)
-        await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
+        await query.edit_message_text(
+            "\n".join(message_parts),
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     except Exception as e:
         logger.error(f"Ошибка при получении карточки пользователя: {e}", exc_info=True)
         await query.edit_message_text(f"❌ Ошибка: {e}")

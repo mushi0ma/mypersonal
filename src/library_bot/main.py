@@ -93,9 +93,7 @@ async def main() -> None:
                 CallbackQueryHandler(books.start_search, pattern="^search_book$"),
                 CallbackQueryHandler(books.show_genres, pattern="^find_by_genre$"),
                 CallbackQueryHandler(books.show_authors_list, pattern="^show_authors$"),
-                # Вложенный обработчик редактирования профиля
                 user_menu.edit_profile_handler,
-                # Возврат в меню (универсальная кнопка)
                 CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
 
@@ -108,6 +106,7 @@ async def main() -> None:
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.process_borrow_selection, pattern=r"^borrow_book_"),
                 CallbackQueryHandler(books.navigate_search_results, pattern="^search_page_"),
+                CallbackQueryHandler(books.start_search, pattern="^search_book$"),
             ],
             State.GETTING_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, books.process_search_query)],
             State.SHOWING_GENRES: [
@@ -119,6 +118,7 @@ async def main() -> None:
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.show_genres, pattern="^find_by_genre$"),
                 CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
+                CallbackQueryHandler(books.start_search, pattern="^search_book$"),
             ],
             State.SHOWING_AUTHORS_LIST: [
                 CallbackQueryHandler(books.show_author_card, pattern=r"^view_author_"),
@@ -128,6 +128,7 @@ async def main() -> None:
                 CallbackQueryHandler(books.show_author_card, pattern=r"^view_author_"),
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.show_authors_list, pattern="^authors_page_"),
+                CallbackQueryHandler(books.start_search, pattern="^search_book$"),
             ],
 
             # --- Удаление профиля ---

@@ -353,13 +353,43 @@ async def process_book_extension(update: Update, context: ContextTypes.DEFAULT_T
 
 @rate_limit(seconds=1)
 async def start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Начинает диалог поиска книги."""
+    """
+    Начинает диалог поиска книги. 
+    Очищает предыдущие результаты поиска.
+    """
     query = update.callback_query
-    await query.answer()
-    await query.edit_message_text(
-        text="🔎 Введите название книги или фамилию автора для поиска:",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]])
+    if query:
+        await query.answer()
+    
+    # Очищаем предыдущие данные поиска
+    context.user_data.pop('last_search_term', None)
+    context.user_data.pop('current_search_page', None)
+    
+    search_message = (
+        "🔎 **Поиск книг**\n\n"
+        "Введите название книги или фамилию автора.\n"
+        "Например:\n"
+        "• `Булгаков`\n"
+        "• `Мастер и Маргарита`\n"
+        "• `1984`"
     )
+    
+    keyboard = [[InlineKeyboardButton("⬅️ Назад в меню", callback_data="user_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if query:
+        await query.edit_message_text(
+            text=search_message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            text=search_message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    
     return State.GETTING_SEARCH_QUERY
 
 @rate_limit(seconds=2)

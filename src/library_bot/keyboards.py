@@ -112,12 +112,17 @@ def get_rating_keyboard(from_return: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rating_buttons)
 
 def get_book_card_keyboard(book_id: int, is_available: bool) -> InlineKeyboardMarkup:
-    """Генерирует клавиатуру для карточки книги."""
+    """Генерирует клавиатуру для карточки книги с кнопкой нового поиска."""
     keyboard = []
+    
     if is_available:
-        keyboard.append([InlineKeyboardButton("✅ Взять эту книгу", callback_data=f"borrow_book_{book_id}")])
+        keyboard.append([
+            InlineKeyboardButton("✅ Взять эту книгу", callback_data=f"borrow_book_{book_id}")
+        ])
+    
     keyboard.extend([
-        [InlineKeyboardButton("🔎 Новый поиск", callback_data="search_book")],
+        [InlineKeyboardButton("🔍 Новый поиск", callback_data="search_book")],
         [InlineKeyboardButton("⬅️ В главное меню", callback_data="user_menu")]
     ])
+    
     return InlineKeyboardMarkup(keyboard)

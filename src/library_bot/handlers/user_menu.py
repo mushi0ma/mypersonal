@@ -75,10 +75,11 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Показывает стилизованный профиль пользователя."""
+    """Показывает улучшенный профиль пользователя с копируемыми данными."""
     query = update.callback_query
     await query.answer()
     user_id = context.user_data['current_user']['id']
+    
     try:
         async with get_db_connection() as conn:
             user_profile = await db_data.get_user_profile(conn, user_id)
@@ -88,24 +89,40 @@ async def view_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> St
         reg_date_str = user_profile['registration_date'].strftime('%d.%m.%Y')
 
         message_parts = [
-            f"👤 **Личный кабинет** 👤", f"`-------------------------`",
+            "👤 **Личный кабинет** 👤",
+            "`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`",
             f"🔹 **Имя:** `{user_profile['full_name']}`",
-            f"🔹 **Юзернейм:** `{user_profile['username']}`",
+            f"🔹 **Username:** `{user_profile['username']}`",
             f"🔹 **Статус:** `{user_profile['status'].capitalize()}`",
             f"🔹 **Контакт:** `{user_profile['contact_info']}`",
-            f"🔹 **В библиотеке с:** `{reg_date_str}`", f"`-------------------------`",
+            f"🔹 **Дата рождения:** `{user_profile.get('dob', 'Не указано')}`",
+            f"🔹 **Telegram ID:** `{user_profile.get('telegram_id', 'Не привязан')}`",
+            f"🔹 **В библиотеке с:** `{reg_date_str}`",
+            "`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`",
             f"📚 **Взятые книги ({len(borrowed_books)}/{borrow_limit})**"
         ]
+        
         if borrowed_books:
-            for i, borrowed in enumerate(borrowed_books):
-                message_parts.append(f"  {i+1}. `{borrowed['book_name']}` (автор: {borrowed['author_name']})")
+            for i, borrowed in enumerate(borrowed_books, 1):
+                due_date_str = borrowed['due_date'].strftime('%d.%m.%Y')
+                message_parts.append(
+                    f"  {i}. `{borrowed['book_name']}`\n"
+                    f"     _Автор:_ {borrowed['author_name']}\n"
+                    f"     _Вернуть до:_ `{due_date_str}`"
+                )
         else:
             message_parts.append("  _У вас нет активных займов._")
 
         reply_markup = keyboards.get_profile_keyboard()
-        await query.edit_message_text("\n".join(message_parts), reply_markup=reply_markup, parse_mode='Markdown')
+        await query.edit_message_text(
+            "\n".join(message_parts),
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
     except db_data.NotFoundError:
-        await query.edit_message_text("❌ Не удалось найти ваш профиль. Пожалуйста, войдите снова с помощью /start.")
+        await query.edit_message_text(
+            "❌ Не удалось найти ваш профиль. Пожалуйста, войдите снова с помощью /start."
+        )
         context.user_data.clear()
         return ConversationHandler.END
 
