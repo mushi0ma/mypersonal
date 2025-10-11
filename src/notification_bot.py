@@ -119,7 +119,13 @@ def setup_notification_bot() -> Application:
     Returns:
         Application: Сконфигурированное приложение Telegram бота
     """
-    application = Application.builder().token(config.NOTIFICATION_BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(config.NOTIFICATION_BOT_TOKEN)
+        .connect_timeout(10)
+        .read_timeout(20)
+        .build()
+    )
 
     # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))

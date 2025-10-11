@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from multiprocessing import Process
+import multiprocessing
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -33,21 +33,24 @@ def run_audit_bot():
     asyncio.run(main())
 
 if __name__ == "__main__":
+    # Используем 'spawn' для чистого запуска процессов, что критично для asyncio
+    multiprocessing.set_start_method("spawn", force=True)
+
     logger.info("🌟 Инициализация системы библиотеки...")
-    
+
     # Создаём процессы для каждого бота
     processes = [
-        Process(target=run_library_bot, name="Library Bot"),
-        Process(target=run_admin_bot, name="Admin Bot"),
-        Process(target=run_notification_bot, name="Notification Bot"),
-        Process(target=run_audit_bot, name="Audit Bot"),
+        multiprocessing.Process(target=run_library_bot, name="Library Bot"),
+        multiprocessing.Process(target=run_admin_bot, name="Admin Bot"),
+        multiprocessing.Process(target=run_notification_bot, name="Notification Bot"),
+        multiprocessing.Process(target=run_audit_bot, name="Audit Bot"),
     ]
-    
+
     # Запускаем все процессы
     for process in processes:
         logger.info(f"🚀 Запуск {process.name}...")
         process.start()
-    
+
     # Ждём завершения всех процессов
     try:
         for process in processes:

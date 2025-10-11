@@ -1,6 +1,14 @@
 # tests/test_admin_bot_integration.py
+import sys
+from unittest.mock import MagicMock
+
+# Глобально мокаем модуль tasks ПЕРЕД любыми другими импортами из приложения.
+# Это предотвращает зависание при сборе тестов, которое происходит из-за
+# инициализации Celery на уровне модуля в src.core.tasks.
+sys.modules['src.core.tasks'] = MagicMock()
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, patch
 import types
 from contextlib import asynccontextmanager
 
@@ -13,20 +21,19 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture
 def patched_admin_bot_handlers():
     """
-    Mocks src.core.tasks and imports admin bot handlers inside a fixture.
-    This prevents pytest from hanging during test collection by removing top-level side effects.
+    Импортирует обработчики админ-бота внутри фикстуры,
+    уже после того как модуль tasks был замокан.
     """
-    with patch.dict('sys.modules', {'src.core.tasks': MagicMock()}):
-        from src.admin_bot.handlers import stats, books
-        from src.core.db import data_access as db_data
-        from src.admin_bot.states import AdminState
+    from src.admin_bot.handlers import stats, books
+    from src.core.db import data_access as db_data
+    from src.admin_bot.states import AdminState
 
-        handlers = types.SimpleNamespace()
-        handlers.stats = stats
-        handlers.books = books
-        handlers.db_data = db_data
-        handlers.AdminState = AdminState
-        yield handlers
+    handlers = types.SimpleNamespace()
+    handlers.stats = stats
+    handlers.books = books
+    handlers.db_data = db_data
+    handlers.AdminState = AdminState
+    yield handlers
 
 def _create_mock_update(text=None, callback_data=None, photo=None, user_id=1, chat_id=1):
     """Creates a mock Update object to simulate admin actions."""

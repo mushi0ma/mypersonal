@@ -19,7 +19,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main() -> None:
     """Запускает бота-аудитора."""
-    application = Application.builder().token(config.ADMIN_NOTIFICATION_BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(config.ADMIN_NOTIFICATION_BOT_TOKEN)
+        .connect_timeout(10)
+        .read_timeout(20)
+        .build()
+    )
     application.add_handler(CommandHandler("start", start))
     
     logger.info("Бот-аудитор инициализирован и готов к запуску.")

@@ -36,7 +36,13 @@ logger.addHandler(handler)
 
 async def main() -> None:
     """Запускает основного бота, собирая его из модулей."""
-    application = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(config.TELEGRAM_BOT_TOKEN)
+        .connect_timeout(10)
+        .read_timeout(20)
+        .build()
+    )
 
     # --- Основной ConversationHandler ---
     conv_handler = ConversationHandler(

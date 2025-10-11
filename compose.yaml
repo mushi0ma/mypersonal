@@ -27,7 +27,7 @@ services:
     command: python src/main.py
     volumes:
       - .:/app
-      - ./backups:/app/backups
+      - ./backups:/backups
     environment:
       - PYTHONPATH=/app
     env_file:
@@ -45,7 +45,7 @@ services:
     command: celery -A src.core.tasks.celery_app worker --loglevel=info
     volumes:
       - .:/app
-      - ./backups:/app/backups
+      - ./backups:/backups
     environment:
       - PYTHONPATH=/app
     env_file:

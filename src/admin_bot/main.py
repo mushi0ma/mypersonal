@@ -20,7 +20,13 @@ admin_filter = filters.User(user_id=config.ADMIN_TELEGRAM_ID)
 
 async def main() -> None:
     """Запускает админ-бота, собирая его из модулей."""
-    application = Application.builder().token(config.ADMIN_BOT_TOKEN).build()
+    application = (
+        Application.builder()
+        .token(config.ADMIN_BOT_TOKEN)
+        .connect_timeout(10)
+        .read_timeout(20)
+        .build()
+    )
 
     # --- Основные команды ---
     application.add_handler(CommandHandler("start", start.start, filters=admin_filter))
