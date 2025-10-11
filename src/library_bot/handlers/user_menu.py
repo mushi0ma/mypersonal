@@ -207,7 +207,7 @@ async def process_delete_self_confirmation(update: Update, context: ContextTypes
 # --- Обработчики редактирования профиля ---
 
 async def start_profile_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Показывает меню редактирования профиля."""
+    """Показывает меню редактирования профиля БЕЗ rate limit."""
     query = update.callback_query
     await query.answer()
     reply_markup = keyboards.get_edit_profile_keyboard()

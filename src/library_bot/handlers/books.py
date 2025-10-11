@@ -611,7 +611,7 @@ async def show_books_in_genre(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(text=message_text, reply_markup=reply_markup, parse_mode='Markdown')
     return State.SHOWING_GENRE_BOOKS
 
-@rate_limit(seconds=2)
+@rate_limit(seconds=1)
 async def show_authors_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Показывает постраничный список всех авторов."""
     query = update.callback_query
