@@ -443,6 +443,63 @@ async def reject_book_request(conn: asyncpg.Connection, request_id: int, reason:
         reason, request_id
     )
 
+async def get_all_ratings_paginated(conn: asyncpg.Connection, limit: int, offset: int) -> tuple[list, int]:
+    """Возвращает постраничный список всех оценок с деталями."""
+    total = await conn.fetchval("SELECT COUNT(*) FROM ratings")
+    
+    rows = await conn.fetch(
+        """
+        SELECT r.rating, r.rating_id,
+               b.name as book_name, a.name as author_name,
+               u.username, u.full_name,
+               (SELECT created_at FROM activity_log 
+                WHERE user_id = r.user_id 
+                AND action = 'rate_book' 
+                AND details LIKE '%Book ID: ' || r.book_id || '%'
+                ORDER BY timestamp DESC LIMIT 1) as rated_at
+        FROM ratings r
+        JOIN books b ON r.book_id = b.id
+        JOIN authors a ON b.author_id = a.id
+        JOIN users u ON r.user_id = u.id
+        ORDER BY rated_at DESC NULLS LAST
+        LIMIT $1 OFFSET $2
+        """,
+        limit, offset
+    )
+    
+    return _records_to_list_of_dicts(rows), total or 0
+
+
+async def get_rating_statistics(conn: asyncpg.Connection) -> dict:
+    """Возвращает общую статистику по оценкам."""
+    stats = await conn.fetchrow(
+        """
+        SELECT 
+            COUNT(*) as total_ratings,
+            AVG(rating)::NUMERIC(3,2) as avg_rating,
+            COUNT(DISTINCT user_id) as users_who_rated,
+            COUNT(DISTINCT book_id) as books_rated
+        FROM ratings
+        """
+    )
+    
+    distribution = await conn.fetch(
+        """
+        SELECT rating, COUNT(*) as count
+        FROM ratings
+        GROUP BY rating
+        ORDER BY rating DESC
+        """
+    )
+    
+    return {
+        'total_ratings': stats['total_ratings'] or 0,
+        'avg_rating': float(stats['avg_rating']) if stats['avg_rating'] else 0,
+        'users_who_rated': stats['users_who_rated'] or 0,
+        'books_rated': stats['books_rated'] or 0,
+        'distribution': {row['rating']: row['count'] for row in distribution}
+    }
+
 # ==============================================================================
 # --- Функции для УВЕДОМЛЕНИЙ и ЛОГОВ (Notifications & Logs) ---
 # ==============================================================================

@@ -197,3 +197,90 @@ async def show_user_activity(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Ошибка при получении логов: {e}", exc_info=True)
         await query.edit_message_text(f"❌ Ошибка: {e}")
+
+async def show_ratings_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает общую статистику и историю оценок."""
+    query = update.callback_query
+    page = int(query.data.split('_')[2]) if query and "ratings_page_" in query.data else 0
+    
+    if query:
+        await query.answer()
+    
+    ratings_per_page = 10
+    
+    try:
+        async with get_db_connection() as conn:
+            stats = await db_data.get_rating_statistics(conn)
+            ratings, total = await db_data.get_all_ratings_paginated(
+                conn, limit=ratings_per_page, offset=page * ratings_per_page
+            )
+        
+        # Формируем статистику
+        message_parts = [
+            "⭐ **Статистика оценок**\n",
+            f"📊 **Всего оценок:** {stats['total_ratings']}",
+            f"📚 **Оценено книг:** {stats['books_rated']}",
+            f"👥 **Пользователей оценило:** {stats['users_who_rated']}",
+            f"📈 **Средняя оценка:** {'⭐' * round(stats['avg_rating'])} ({stats['avg_rating']:.2f}/5.0)\n",
+        ]
+        
+        # Распределение оценок
+        if stats['distribution']:
+            message_parts.append("**Распределение:**")
+            for rating in range(5, 0, -1):
+                count = stats['distribution'].get(rating, 0)
+                bar_length = int((count / stats['total_ratings']) * 10) if stats['total_ratings'] > 0 else 0
+                bar = "█" * bar_length + "░" * (10 - bar_length)
+                message_parts.append(f"{'⭐' * rating}: {bar} {count}")
+            message_parts.append("")
+        
+        # История оценок
+        if ratings:
+            message_parts.append(f"**📜 История оценок** (стр. {page + 1}/{(total + ratings_per_page - 1) // ratings_per_page}):\n")
+            
+            for r in ratings:
+                stars = "⭐" * r['rating']
+                date_str = r['rated_at'].strftime('%d.%m %H:%M') if r['rated_at'] else 'Неизвестно'
+                message_parts.append(
+                    f"{stars} — `{r['book_name']}`\n"
+                    f"   _@{r['username']} • {date_str}_"
+                )
+        else:
+            message_parts.append("_Пока нет оценок._")
+        
+        # Навигация
+        keyboard = []
+        nav_buttons = []
+        
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️", callback_data=f"ratings_page_{page - 1}"))
+        if (page + 1) * ratings_per_page < total:
+            nav_buttons.append(InlineKeyboardButton("➡️", callback_data=f"ratings_page_{page + 1}"))
+        
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        
+        keyboard.append([InlineKeyboardButton("📊 Назад к статистике", callback_data="back_to_stats_panel")])
+        
+        message_text = "\n".join(message_parts)
+        
+        if query:
+            await query.edit_message_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+        else:
+            await update.message.reply_text(
+                message_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode='Markdown'
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при получении истории оценок: {e}", exc_info=True)
+        error_msg = f"❌ Ошибка: {e}"
+        if query:
+            await query.edit_message_text(error_msg)
+        else:
+            await update.message.reply_text(error_msg)

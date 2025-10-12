@@ -3,9 +3,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 # --- Клавиатуры для управления пользователями ---
 
 def get_stats_panel_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для панели статистики."""
-    keyboard = [[InlineKeyboardButton("👥 Посмотреть список пользователей", callback_data="users_list_page_0")]]
+    """Клавиатура для панели статистики с кнопкой истории оценок."""
+    keyboard = [
+        [InlineKeyboardButton("👥 Список пользователей", callback_data="users_list_page_0")],
+        [InlineKeyboardButton("⭐ История оценок", callback_data="ratings_page_0")]
+    ]
     return InlineKeyboardMarkup(keyboard)
+
 
 def get_users_list_keyboard(users: list, total_users: int, page: int, users_per_page: int) -> InlineKeyboardMarkup:
     """Клавиатура для постраничного списка пользователей."""

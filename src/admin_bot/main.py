@@ -23,6 +23,7 @@ admin_filter = filters.User(user_id=config.ADMIN_TELEGRAM_ID)
 
 async def main() -> None:
     from src.admin_bot.handlers import requests
+    from src.admin_bot.handlers import help as help_handler
     """Запускает админ-бота, собирая его из модулей."""
     application = (
         Application.builder()
@@ -49,6 +50,7 @@ async def main() -> None:
     application.add_handler(CommandHandler("stats", stats.show_stats_panel, filters=admin_filter))
     application.add_handler(CommandHandler("books", books.show_books_list, filters=admin_filter))
     application.add_handler(CommandHandler("requests", requests.show_book_requests, filters=admin_filter))
+    application.add_handler(CommandHandler("help", help_handler.show_help, filters=admin_filter))
 
     # --- Диалоги (ConversationHandlers) ---
     application.add_handler(broadcast.broadcast_handler)
@@ -74,6 +76,7 @@ async def main() -> None:
     application.add_handler(CallbackQueryHandler(requests.view_book_request, pattern="^view_request_"))
     application.add_handler(CallbackQueryHandler(requests.approve_request_and_add_book, pattern="^approve_request_"))
     application.add_handler(CallbackQueryHandler(requests.reject_book_request, pattern="^reject_request_"))
+    application.add_handler(CallbackQueryHandler(stats.show_ratings_history, pattern="^ratings_page_"))
 
     logger.info("Админ-бот инициализирован и готов к запуску.")
     
