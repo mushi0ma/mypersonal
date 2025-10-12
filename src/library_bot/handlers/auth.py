@@ -11,7 +11,7 @@ from src.core.db.utils import get_db_connection, hash_password
 from src.core import tasks
 from src.library_bot.states import State
 from src.library_bot.utils import normalize_phone_number
-from src.library_bot.handlers.registration import send_verification_message # Импортируем, чтобы не дублировать
+from src.library_bot.handlers.registration import send_verification_message
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,13 @@ async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     """Начинает процесс входа."""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("👤 Введите ваш **юзернейм** или **контакт** для входа:", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+    await query.edit_message_text(
+        "👤 Введите ваш **юзернейм** или **контакт** для входа:", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.LOGIN_CONTACT
 
 async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -37,13 +43,24 @@ async def get_login_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data['login_user'] = user
         context.user_data['login_attempts'] = 0
 
-        keyboard = [[InlineKeyboardButton("🤔 Забыли пароль?", callback_data="forgot_password")]]
+        keyboard = [
+            [InlineKeyboardButton("🤔 Забыли пароль?", callback_data="forgot_password")],
+            [InlineKeyboardButton("❌ Отменить", callback_data="cancel")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text("🔑 Введите ваш **пароль**:", reply_markup=reply_markup, parse_mode='Markdown')
+        await update.message.reply_text(
+            "🔑 Введите ваш **пароль**:", 
+            reply_markup=reply_markup, 
+            parse_mode='Markdown'
+        )
         return State.LOGIN_PASSWORD
     except db_data.NotFoundError:
-        await update.message.reply_text("❌ Пользователь не найден. Попробуйте еще раз или зарегистрируйтесь.")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "❌ Пользователь не найден. Попробуйте еще раз или зарегистрируйтесь.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.LOGIN_CONTACT
 
 async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State | int:
@@ -74,7 +91,10 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
         context.user_data.pop('login_attempts', None)
         login_lockouts.pop(user_id, None)
 
-        await update.message.reply_text(f"🎉 Добро пожаловать, {user['full_name']}!")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"🎉 Добро пожаловать, {user['full_name']}!"
+        )
         context.user_data['current_user'] = user
         context.user_data.pop('login_user')
 
@@ -97,10 +117,21 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
             )
 
             context.user_data.pop('login_attempts', None)
-            await update.message.reply_text("❌ Неверный пароль. Вы исчерпали количество попыток.\n\n🔒 Вход заблокирован на 5 минут.")
-            return ConversationHandler.END # Выход из диалога входа
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ Неверный пароль. Вы исчерпали количество попыток.\n\n🔒 Вход заблокирован на 5 минут."
+            )
+            return ConversationHandler.END
         else:
-            await update.message.reply_text(f"❌ Неверный пароль. Осталось попыток: {3 - attempts}.")
+            keyboard = [
+                [InlineKeyboardButton("🤔 Забыли пароль?", callback_data="forgot_password")],
+                [InlineKeyboardButton("❌ Отменить", callback_data="cancel")]
+            ]
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"❌ Неверный пароль. Осталось попыток: {3 - attempts}.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
             return State.LOGIN_PASSWORD
 
 # --- Обработчики диалога восстановления пароля ---
@@ -109,56 +140,98 @@ async def start_forgot_password(update: Update, context: ContextTypes.DEFAULT_TY
     """Начинает процесс восстановления пароля."""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("🔑 Введите ваш **юзернейм** или **контакт** для сброса пароля:", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+    await query.edit_message_text(
+        "🔑 Введите ваш **юзернейм** или **контакт** для сброса пароля:", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.FORGOT_PASSWORD_CONTACT
 
 async def get_forgot_password_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Получает контакт, отправляет код верификации."""
     contact_input = update.message.text
     contact_processed = normalize_phone_number(contact_input)
+    
     try:
         async with get_db_connection() as conn:
             user = await db_data.get_user_by_login(conn, contact_processed)
     except db_data.NotFoundError:
-        await update.message.reply_text("❌ Пользователь с такими данными не найден.")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "❌ Пользователь с такими данными не найден.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.FORGOT_PASSWORD_CONTACT
 
-    user_telegram_id = user['telegram_id'] if user['telegram_id'] else update.effective_user.id
+    user_telegram_id = user.get('telegram_id') or update.effective_user.id
     code = str(random.randint(100000, 999999))
     context.user_data['forgot_password_code'] = code
     context.user_data['forgot_password_contact'] = user['contact_info']
 
     sent = await send_verification_message(user['contact_info'], code, context, user_telegram_id)
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
     if sent:
-        await update.message.reply_text(f"📲 Код верификации отправлен на {user['contact_info']}. Введите его:")
+        await update.message.reply_text(
+            f"📲 Код верификации отправлен на {user['contact_info']}. Введите его:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.FORGOT_PASSWORD_VERIFY_CODE
     else:
-        await update.message.reply_text("⚠️ Не удалось отправить код верификации. Попробуйте еще раз.")
+        await update.message.reply_text(
+            "⚠️ Не удалось отправить код верификации. Попробуйте еще раз.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.FORGOT_PASSWORD_CONTACT
 
 async def verify_forgot_password_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Проверяет код и запрашивает новый пароль."""
     if update.message.text == context.user_data.get('forgot_password_code'):
-        await update.message.reply_text("✅ Код верный! Введите **новый пароль** (минимум 8 символов, буквы и цифры/спецсимволы):", parse_mode='Markdown')
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "✅ Код верный! Введите **новый пароль** (минимум 8 символов, буквы и цифры/спецсимволы):", 
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         context.user_data.pop('forgot_password_code', None)
         return State.FORGOT_PASSWORD_SET_NEW
     else:
-        await update.message.reply_text("❌ Неверный код. Попробуйте еще раз.")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "❌ Неверный код. Попробуйте еще раз.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.FORGOT_PASSWORD_VERIFY_CODE
 
 async def set_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Получает и валидирует новый пароль."""
+    """Получает и валидирует новый пароль СРАЗУ."""
     new_password = update.message.text
     try:
         await update.message.delete()
-    except Exception: pass
+    except Exception: 
+        pass
 
+    # ПРОВЕРКА ПАРОЛЯ НА МЕСТЕ
     if len(new_password) < 8 or not any(c.isalpha() for c in new_password) or not any(c.isdigit() or not c.isalnum() for c in new_password):
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Пароль не соответствует требованиям. Попробуйте снова.")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="❌ Пароль должен содержать:\n• Минимум 8 символов\n• Буквы\n• Цифры или спецсимволы\n\nПопробуйте снова:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.FORGOT_PASSWORD_SET_NEW
 
     context.user_data['forgot_password_temp'] = new_password
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="👍 Пожалуйста, **введите новый пароль еще раз**:", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id, 
+        text="👍 Пожалуйста, **введите новый пароль еще раз**:", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.FORGOT_PASSWORD_CONFIRM_NEW
 
 async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -166,10 +239,16 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
     password_confirm = update.message.text
     try:
         await update.message.delete()
-    except Exception: pass
+    except Exception: 
+        pass
 
     if context.user_data.get('forgot_password_temp') != password_confirm:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Пароли не совпадают. Пожалуйста, введите новый пароль заново.")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="❌ Пароли не совпадают. Пожалуйста, введите новый пароль заново.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.FORGOT_PASSWORD_SET_NEW
 
     login_query = context.user_data['forgot_password_contact']
@@ -177,11 +256,17 @@ async def confirm_new_password(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         async with get_db_connection() as conn:
             await db_data.update_user_password(conn, login_query, final_password)
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="🎉 Пароль успешно обновлен! Теперь вы можете войти.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="🎉 Пароль успешно обновлен! Теперь вы можете войти с новым паролем."
+        )
     except Exception as e:
         logger.error(f"Ошибка при обновлении пароля: {e}", exc_info=True)
         tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при обновлении пароля**: `{e}`")
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Произошла ошибка. Администратор уведомлен.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="❌ Произошла ошибка. Администратор уведомлен."
+        )
 
     context.user_data.clear()
     return ConversationHandler.END

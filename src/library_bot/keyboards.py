@@ -19,7 +19,7 @@ def get_status_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Студент", callback_data="студент"),
             InlineKeyboardButton("Преподаватель", callback_data="учитель")
         ],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_start")]
+        [InlineKeyboardButton("❌ Отменить", callback_data="cancel")]
     ]
     return InlineKeyboardMarkup(keyboard)
 

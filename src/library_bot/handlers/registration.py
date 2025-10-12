@@ -3,7 +3,7 @@
 import logging
 import random
 import re
-from telegram import Update, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 
 from src.core.db import data_access as db_data
@@ -67,23 +67,46 @@ async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     context.user_data.clear()
     context.user_data['registration'] = {}
-    await query.edit_message_text("📝 Начинаем регистрацию. Введите ваше **ФИО**:", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить регистрацию", callback_data="cancel")]]
+    await query.edit_message_text(
+        "📝 Начинаем регистрацию. Введите ваше **ФИО**:", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.REGISTER_NAME
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Получает ФИО и запрашивает дату рождения."""
     context.user_data['registration']['full_name'] = update.message.text
-    await update.message.reply_text("🎂 Введите **дату рождения** (ДД.ММ.ГГГГ):\n\n/cancel для отмены", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+    await update.message.reply_text(
+        "🎂 Введите **дату рождения** (ДД.ММ.ГГГГ):", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.REGISTER_DOB
 
 async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Получает дату рождения и запрашивает контакт."""
     dob = update.message.text
     if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", dob):
-        await update.message.reply_text("❌ Неверный формат. Используйте **ДД.ММ.ГГГГ**.\n\n/cancel для отмены")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "❌ Неверный формат. Используйте **ДД.ММ.ГГГГ**.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.REGISTER_DOB
+    
     context.user_data['registration']['dob'] = dob
-    await update.message.reply_text("📞 Введите ваш **контакт** (email, телефон или @username):\n\n/cancel для отмены", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+    await update.message.reply_text(
+        "📞 Введите ваш **контакт** (email, телефон или @username):", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.REGISTER_CONTACT
 
 async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -92,7 +115,12 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     try:
         async with get_db_connection() as conn:
             await db_data.get_user_by_login(conn, contact_processed)
-        await update.message.reply_text("🤔 Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.")
+        
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "🤔 Пользователь с такими данными уже существует. Попробуйте войти или введите другой контакт.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.REGISTER_CONTACT
     except db_data.NotFoundError:
         pass
@@ -101,11 +129,20 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Sta
     code = str(random.randint(100000, 999999))
     context.user_data['verification_code'] = code
     sent = await send_verification_message(contact_processed, code, context, update.effective_user.id)
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
     if sent:
-        await update.message.reply_text(f"📲 На ваш контакт ({contact_processed}) отправлен **код верификации**. Введите его:", parse_mode='Markdown')
+        await update.message.reply_text(
+            f"📲 На ваш контакт ({contact_processed}) отправлен **код верификации**. Введите его:", 
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.REGISTER_VERIFY_CODE
     else:
-        await update.message.reply_text("⚠️ Не удалось отправить код. Проверьте правильность введенных данных.")
+        await update.message.reply_text(
+            "⚠️ Не удалось отправить код. Проверьте правильность введенных данных.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.REGISTER_CONTACT
 
 async def verify_registration_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -116,7 +153,11 @@ async def verify_registration_code(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop('verification_code', None)
         return State.REGISTER_STATUS
     else:
-        await update.message.reply_text("❌ Неверный код. Попробуйте еще раз.")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "❌ Неверный код. Попробуйте еще раз.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.REGISTER_VERIFY_CODE
 
 async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -124,55 +165,86 @@ async def get_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Stat
     query = update.callback_query
     await query.answer()
     context.user_data['registration']['status'] = query.data
-    await query.edit_message_text("🧑‍💻 Придумайте **юзернейм** (на английском, без пробелов):", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+    await query.edit_message_text(
+        "🧑‍💻 Придумайте **юзернейм** (на английском, без пробелов):", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.REGISTER_USERNAME
 
 async def get_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Получает юзернейм и запрашивает пароль."""
     username = update.message.text
     if not re.match(r"^[a-zA-Z0-9_]{3,}$", username):
-        await update.message.reply_text("❌ Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'.")
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+        await update.message.reply_text(
+            "❌ Неверный формат. Юзернейм должен быть не короче 3 символов и состоять из английских букв, цифр и знака '_'.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return State.REGISTER_USERNAME
+    
     context.user_data['registration']['username'] = username
-    await update.message.reply_text("🔑 Создайте **пароль** (минимум 8 символов, буквы и цифры/спецсимволы):", parse_mode='Markdown')
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
+    await update.message.reply_text(
+        "🔑 Создайте **пароль** (минимум 8 символов, буквы и цифры/спецсимволы):", 
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return State.REGISTER_PASSWORD
 
 async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Получает и валидирует пароль."""
+    """Получает и валидирует пароль СРАЗУ."""
     password = update.message.text
+    
+    # Удаляем сообщение с паролем
     try:
         await update.message.delete()
     except Exception as e:
         logger.warning(f"Не удалось удалить сообщение с паролем: {e}")
 
+    # ПРОВЕРКА ПАРОЛЯ НА МЕСТЕ
     if len(password) < 8 or not any(c.isalpha() for c in password) or not any(c.isdigit() or not c.isalnum() for c in password):
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Пароль должен содержать минимум 8 символов, буквы и цифры/спецсимволы.\nПопробуйте снова:",
-            parse_mode='Markdown'
+            text="❌ Пароль должен содержать:\n• Минимум 8 символов\n• Буквы\n• Цифры или спецсимволы\n\nПопробуйте снова:",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return State.REGISTER_PASSWORD
 
+    # Пароль валидный - сохраняем
     context.user_data['registration']['password_temp'] = password
+    
+    keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text="👍 Отлично. Теперь **введите пароль еще раз** для подтверждения:",
-        parse_mode='Markdown'
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return State.REGISTER_CONFIRM_PASSWORD
 
 async def get_password_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Завершает регистрацию с улучшенным уведомлением админу."""
+    """Завершает регистрацию и автоматически входит в систему."""
     password_confirm = update.message.text
+    
+    # Удаляем сообщение с подтверждением пароля
     try:
         await update.message.delete()
     except Exception as e:
         logger.warning(f"Не удалось удалить сообщение с подтверждением пароля: {e}")
 
+    # Проверяем совпадение паролей
     if context.user_data['registration'].get('password_temp') != password_confirm:
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Пароли не совпадают. Пожалуйста, придумайте пароль заново."
+            text="❌ Пароли не совпадают. Пожалуйста, придумайте пароль заново.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return State.REGISTER_PASSWORD
 
@@ -191,10 +263,9 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
             reg_code = await db_data.set_registration_code(conn, user_id)
             context.user_data['user_id_for_activation'] = user_id
             
-            # Получаем telegram_id нового пользователя для уведомления
             telegram_id = update.effective_user.id
 
-        # Улучшенное уведомление админу
+        # Уведомление админу
         tasks.notify_admin.delay(
             text=(
                 f"✅ **Новая регистрация**\n\n"
@@ -228,14 +299,17 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         return State.AWAITING_NOTIFICATION_BOT
 
     except db_data.UserExistsError as e:
+        keyboard = [[InlineKeyboardButton("❌ Отменить", callback_data="cancel")]]
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=f"❌ Ошибка: {e} Попробуйте другой."
+            text=f"❌ Ошибка: {e} Попробуйте другой.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="🧑‍💻 Придумайте **юзернейм** (на английском, без пробелов):",
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return State.REGISTER_USERNAME
     except Exception as e:
@@ -250,7 +324,7 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         return ConversationHandler.END
 
 async def check_notification_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Проверяет, привязал ли пользователь telegram_id через бота-уведомителя."""
+    """Проверяет подписку и АВТОМАТИЧЕСКИ ВХОДИТ в систему после успешной регистрации."""
     query = update.callback_query
     await query.answer()
 
@@ -270,12 +344,21 @@ async def check_notification_subscription(update: Update, context: ContextTypes.
 
         if is_subscribed:
             tasks.notify_admin.delay(
-                text=f"✅ **Новая регистрация**\n\n**Пользователь:** @{user.get('telegram_username', user.get('username'))}\n**ID:** {user_id}",
+                text=f"✅ **Регистрация завершена**\n\n**Пользователь:** @{user.get('telegram_username', user.get('username'))}\n**ID:** {user_id}",
                 category='new_user'
             )
-            await query.edit_message_text("🎉 **Регистрация завершена!**\n\nТеперь вы можете войти в систему.")
-            context.user_data.clear()
-            return ConversationHandler.END
+            
+            # АВТОМАТИЧЕСКИЙ ВХОД
+            context.user_data['current_user'] = user
+            context.user_data.pop('user_id_for_activation', None)
+            context.user_data.pop('registration', None)
+            
+            await query.edit_message_text("🎉 **Регистрация завершена!**\n\nСекунду, загружаю ваше меню...")
+            
+            # Перенаправляем в главное меню
+            from src.library_bot.handlers.user_menu import user_menu
+            await user_menu(update, context)
+            return State.USER_MENU
         else:
             await query.answer("⚠️ Вы еще не запустили бота-уведомителя. Пожалуйста, нажмите на кнопку выше.", show_alert=True)
             return State.AWAITING_NOTIFICATION_BOT
