@@ -136,13 +136,31 @@ function Invoke-DbBackup {
 function Invoke-DbRestore {
     Write-Info ">>> Восстановление базы данных из последнего бэкапа..."
     $latestBackup = Get-ChildItem -Path "backups" -Filter "*.sql" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (-not $latestBackup) { Write-Error "Бэкапы не найдены в папке /backups"; return }
+    if (-not $latestBackup) {
+        Write-Error "Бэкапы не найдены в папке /backups"
+        return
+    }
+
     Write-Warning "Найден последний бэкап: $($latestBackup.Name)"
-    Write-Error "Текущая база данных будет полностью УДАЛЕНА и заменена данными из бэкапа!"; Read-Host -Prompt "Нажмите Enter для продолжения..."
-    & $DOCKER_COMPOSE down -v --remove-orphans; Invoke-Up
-    Write-Warning "Ожидание запуска БД (15 секунд)..."; Start-Sleep -Seconds 15
-    $dbName = $env:DB_NAME; if (-not $dbName) { $dbName = "library_db" }
-    Write-Info ">>> Загрузка данных из бэкапа..."; Get-Content $latestBackup.FullName | docker exec -i $($DOCKER_COMPOSE ps -q $DB_SERVICE) psql -U postgres -d $dbName
+    Write-Error "Текущая база данных будет полностью УДАЛЕНА и заменена данными из бэкапа!"
+    Read-Host -Prompt "Нажмите Enter для продолжения..."
+
+    # Эта часть в вашем скрипте была немного неоптимальной, я ее улучшил
+    Write-Info ">>> Пересоздание сервиса БД..."
+    & $DOCKER_COMPOSE rm -sfv $DB_SERVICE
+    docker volume rm $(docker volume ls -q | Where-Object { $_ -like "*_db_data" }) | Out-Null
+    
+    Invoke-DbStart
+    Write-Warning "Ожидание запуска БД (15 секунд)..."
+    Start-Sleep -Seconds 15
+
+    $dbName = $env:DB_NAME
+    if (-not $dbName) { $dbName = "library_db" }
+    
+    Write-Info ">>> Загрузка данных из бэкапа..."
+    # Вот исправленная строка:
+    Get-Content $latestBackup.FullName | docker exec -i $( & $DOCKER_COMPOSE ps -q $DB_SERVICE ) psql -U postgres -d $dbName
+    
     Write-Success "✓ База данных успешно восстановлена из файла $($latestBackup.Name)!"
 }
 
