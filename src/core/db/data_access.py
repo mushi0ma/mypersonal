@@ -454,7 +454,7 @@ async def get_all_ratings_paginated(conn: asyncpg.Connection, limit: int, offset
                u.username, u.full_name,
                (SELECT created_at FROM activity_log 
                 WHERE user_id = r.user_id 
-                AND action = 'rate_book' 
+                AND action IN ('rate_book', 'add_rating', 'update_rating')
                 AND details LIKE '%Book ID: ' || r.book_id || '%'
                 ORDER BY timestamp DESC LIMIT 1) as rated_at
         FROM ratings r
