@@ -3,11 +3,11 @@ import os
 import logging
 import asyncio
 import subprocess
+import asyncpg
 from celery import Celery
 from celery.schedules import crontab
 import telegram
 from src.core.db import data_access as db_data
-from src.core.db.utils import get_db_connection
 from datetime import datetime
 from celery import group
 from celery.exceptions import SoftTimeLimitExceeded
@@ -33,15 +33,31 @@ celery_app.conf.task_annotations = {
     'src.core.tasks.broadcast_new_book': {'rate_limit': '1/m', 'time_limit': 600},
 }
 
+# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СОЗДАНИЯ СОЕДИНЕНИЯ ---
+
+async def get_connection():
+    """Создает новое соединение с БД для каждой задачи."""
+    return await asyncpg.connect(
+        database=config.DB_NAME,
+        user=config.DB_USER,
+        password=config.DB_PASSWORD,
+        host=config.DB_HOST,
+        port=config.DB_PORT
+    )
+
 # --- АСИНХРОННЫЕ ВЕРСИИ НИЗКОУРОВНЕВЫХ ЗАДАЧ ---
 
 async def _async_notify_user(user_id: int, text: str, category: str, button_text: str | None, button_callback: str | None):
     """Асинхронная логика для отправки уведомления пользователю."""
+    conn = None
     try:
         user_notifier_bot = telegram.Bot(token=config.NOTIFICATION_BOT_TOKEN)
-        async with get_db_connection() as conn:
-            await db_data.create_notification(conn, user_id=user_id, text=text, category=category)
-            telegram_id = await db_data.get_telegram_id_by_user_id(conn, user_id)
+        
+        # Создаем новое соединение для этой задачи
+        conn = await get_connection()
+        
+        await db_data.create_notification(conn, user_id=user_id, text=text, category=category)
+        telegram_id = await db_data.get_telegram_id_by_user_id(conn, user_id)
 
         reply_markup = None
         if button_text and button_callback:
@@ -59,6 +75,9 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
         logger.warning(f"Не удалось отправить уведомление: telegram_id для user_id={user_id} не найден.")
     except Exception as e:
         logger.error(f"Ошибка в _async_notify_user для user_id={user_id}: {e}", exc_info=True)
+    finally:
+        if conn:
+            await conn.close()
 
 async def _async_notify_admin(text: str, category: str = 'audit'):
     """Улучшенная логика отправки уведомлений админу с Telegram ID."""
@@ -103,9 +122,15 @@ def notify_admin(text: str, category: str = 'audit'):
 async def _async_broadcast_new_book(book_id: int):
     """Асинхронная логика рассылки о новой книге."""
     logger.info(f"Запущена рассылка о новой книге с ID: {book_id}")
-    async with get_db_connection() as conn:
+    
+    conn = None
+    try:
+        conn = await get_connection()
         book = await db_data.get_book_card_details(conn, book_id)
         all_user_ids = await db_data.get_all_user_ids(conn)
+    finally:
+        if conn:
+            await conn.close()
 
     text = f"🆕 **В библиотеке пополнение!**\n\nКнига «{book['name']}» от автора {book['author']} была добавлена в каталог."
     button_text = "📖 Посмотреть карточку книги"
@@ -149,9 +174,15 @@ def broadcast_new_book(self, book_id: int):
 async def _async_check_due_dates():
     """Асинхронная логика проверки сроков."""
     logger.info("Выполняется периодическая задача: проверка сроков сдачи книг...")
-    async with get_db_connection() as conn:
+    
+    conn = None
+    try:
+        conn = await get_connection()
         overdue_entries = await db_data.get_users_with_overdue_books(conn)
         due_soon_entries = await db_data.get_users_with_books_due_soon(conn, days_ahead=2)
+    finally:
+        if conn:
+            await conn.close()
 
     if overdue_entries:
         logger.info(f"Найдено просроченных книг: {len(overdue_entries)}")
@@ -208,7 +239,6 @@ def backup_database():
     """Создает резервную копию базы данных PostgreSQL."""
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        # Путь для бэкапов внутри контейнера, доступный для appuser
         backup_dir = os.getenv('BACKUP_DIR', '/app/backups')
         os.makedirs(backup_dir, exist_ok=True)
         filename = f"{backup_dir}/backup_{timestamp}.sql"
