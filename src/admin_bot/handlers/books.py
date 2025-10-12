@@ -384,3 +384,19 @@ edit_book_handler = ConversationHandler(
     per_chat=True,
     per_user=True
 )
+
+bulk_add_books_handler = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(start_bulk_add_books, pattern="^bulk_add_start$")
+    ],
+    states={
+        AdminState.BULK_ADD_WAITING_FILE: [
+            MessageHandler(filters.Document.CSV, process_bulk_add_csv)
+        ]
+    },
+    fallbacks=[
+        CallbackQueryHandler(show_books_list, pattern="^books_page_0$")
+    ],
+    per_user=True,
+    per_chat=True
+)
