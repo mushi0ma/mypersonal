@@ -90,7 +90,7 @@ async def test_stats_command(db_session, monkeypatch, mock_context, patched_admi
     update.message.reply_text.assert_called_once()
     call_args = update.message.reply_text.call_args
     message_text = call_args[0][0]
-    assert "📊 Панель статистики" in message_text
+    assert "📊 **Панель статистики**" in message_text
     assert "Активных пользователей" in message_text
 
 async def test_add_book_flow(db_session, monkeypatch, mock_context, patched_admin_bot_handlers):
@@ -133,11 +133,12 @@ async def test_add_book_flow(db_session, monkeypatch, mock_context, patched_admi
     assert state == AdminState.CONFIRM_ADD
     
     # Check that the confirmation was shown
-    update.message.reply_text.assert_called_with(
-        text=pytest.string_containing("🔍 Проверьте данные"),
-        reply_markup=pytest.anything,
-        parse_mode='Markdown'
-    )
+    update.message.reply_text.assert_called_once()
+    call_args, call_kwargs = update.message.reply_text.call_args
+    # Проверяем, что нужный текст содержится в сообщении
+    assert "🔍 Проверьте данные" in call_kwargs['text']
+    # Проверяем, что режим парсинга правильный
+    assert call_kwargs['parse_mode'] == 'Markdown'
 
     # Step 7: Save the book
     update = _create_mock_update(callback_data="add_book_save_simple")
