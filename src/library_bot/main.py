@@ -35,7 +35,7 @@ logger.addHandler(handler)
 
 
 async def main() -> None:
-    """Запускает основного бота, собирая его из модулей."""
+    """Запускает основного бота с всеми исправлениями."""
     application = (
         Application.builder()
         .token(config.TELEGRAM_BOT_TOKEN)
@@ -52,9 +52,9 @@ async def main() -> None:
             State.START_ROUTES: [
                 CallbackQueryHandler(registration.start_registration, pattern="^register$"),
                 CallbackQueryHandler(auth.start_login, pattern="^login$"),
-                # Обработчики для кнопок из уведомлений, которые могут прийти в любом состоянии
+                # Обработчики для кнопок из уведомлений
                 CallbackQueryHandler(books.process_book_extension, pattern=r"^extend_borrow_"),
-                CallbackQueryHandler(books.select_rating, pattern=r"^rate_book_"),
+                CallbackQueryHandler(books.handle_rate_from_notification, pattern=r"^rate_book_"),
                 CallbackQueryHandler(books.process_borrow_selection, pattern=r"^borrow_book_"),
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
             ],
@@ -93,55 +93,63 @@ async def main() -> None:
                 CallbackQueryHandler(books.start_search, pattern="^search_book$"),
                 CallbackQueryHandler(books.show_genres, pattern="^find_by_genre$"),
                 CallbackQueryHandler(books.show_authors_list, pattern="^show_authors$"),
-                user_menu.edit_profile_handler,
-                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
                 CallbackQueryHandler(books.start_book_request, pattern="^request_book$"),
+                # Вложенный обработчик редактирования профиля
+                user_menu.edit_profile_handler,
+                # Возврат в меню
+                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
+
+            # --- Запрос на книгу ---
+            State.BOOK_REQUEST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_name)],
+            State.BOOK_REQUEST_AUTHOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_author)],
+            State.BOOK_REQUEST_GENRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_genre)],
+            State.BOOK_REQUEST_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, books.confirm_book_request)],
 
             # --- Работа с книгами ---
             State.USER_RETURN_BOOK: [CallbackQueryHandler(books.process_return_book, pattern=r"^return_\d+$")],
             State.USER_RATE_BOOK_SELECT: [CallbackQueryHandler(books.select_rating, pattern=r"^rate_\d+$")],
             State.USER_RATE_BOOK_RATING: [CallbackQueryHandler(books.process_rating, pattern=r"^rating_\d+$")],
             State.USER_RESERVE_BOOK_CONFIRM: [CallbackQueryHandler(books.process_reservation_decision, pattern=r"^reserve_(yes|no)$")],
+            
             State.SHOWING_SEARCH_RESULTS: [
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.process_borrow_selection, pattern=r"^borrow_book_"),
                 CallbackQueryHandler(books.navigate_search_results, pattern="^search_page_"),
                 CallbackQueryHandler(books.start_search, pattern="^search_book$"),
+                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
-            State.GETTING_SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, books.process_search_query)],
+            
+            State.GETTING_SEARCH_QUERY: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, books.process_search_query),
+                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
+            ],
+            
             State.SHOWING_GENRES: [
                 CallbackQueryHandler(books.show_books_in_genre, pattern=r"^genre_"),
                 CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
+            
             State.SHOWING_GENRE_BOOKS: [
                 CallbackQueryHandler(books.show_books_in_genre, pattern=r"^genre_"),
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.show_genres, pattern="^find_by_genre$"),
-                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
                 CallbackQueryHandler(books.start_search, pattern="^search_book$"),
+                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
+            
             State.SHOWING_AUTHORS_LIST: [
                 CallbackQueryHandler(books.show_author_card, pattern=r"^view_author_"),
                 CallbackQueryHandler(books.show_authors_list, pattern="^authors_page_"),
+                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
+            
             State.VIEWING_AUTHOR_CARD: [
                 CallbackQueryHandler(books.show_author_card, pattern=r"^view_author_"),
                 CallbackQueryHandler(books.show_book_card_user, pattern="^view_book_"),
                 CallbackQueryHandler(books.show_authors_list, pattern="^authors_page_"),
                 CallbackQueryHandler(books.start_search, pattern="^search_book$"),
-            ],
-            State.BOOK_REQUEST_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_name)
-            ],
-            State.BOOK_REQUEST_AUTHOR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_author)
-            ],
-            State.BOOK_REQUEST_GENRE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, books.get_book_request_genre)
-            ],
-            State.BOOK_REQUEST_DESCRIPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, books.confirm_book_request)
+                CallbackQueryHandler(user_menu.user_menu, pattern="^user_menu$"),
             ],
 
             # --- Удаление профиля ---
@@ -162,7 +170,6 @@ async def main() -> None:
     application.add_handler(conv_handler)
     logger.info("Основной бот инициализирован и готов к запуску...")
     
-    # Запускаем бота асинхронно
     await application.initialize()
     await application.start()
     await application.updater.start_polling()

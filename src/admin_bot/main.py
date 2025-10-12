@@ -22,9 +22,7 @@ logger = logging.getLogger(__name__)
 admin_filter = filters.User(user_id=config.ADMIN_TELEGRAM_ID)
 
 async def main() -> None:
-    from src.admin_bot.handlers import requests
-    from src.admin_bot.handlers import help as help_handler
-    """Запускает админ-бота, собирая его из модулей."""
+    """Запускает админ-бота с всеми новыми функциями."""
     application = (
         Application.builder()
         .token(config.ADMIN_BOT_TOKEN)
@@ -32,18 +30,9 @@ async def main() -> None:
         .read_timeout(20)
         .build()
     )
-    
-    bulk_add_books_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(books.start_bulk_add_books, pattern="^admin_bulk_add_books$")],
-    states={
-        AdminState.BULK_ADD_WAITING_FILE: [
-            MessageHandler(filters.Document.ALL, books.process_bulk_add_csv)
-        ],
-    },
-    fallbacks=[CallbackQueryHandler(books.show_books_list, pattern="^books_page_0$")],
-    per_user=True,
-    per_chat=True
-    )
+
+    # Импорты
+    from src.admin_bot.handlers import stats, books, broadcast, start, requests, help as help_handler
 
     # --- Основные команды ---
     application.add_handler(CommandHandler("start", start.start, filters=admin_filter))
@@ -56,31 +45,31 @@ async def main() -> None:
     application.add_handler(broadcast.broadcast_handler)
     application.add_handler(books.add_book_handler)
     application.add_handler(books.edit_book_handler)
+    application.add_handler(books.bulk_add_books_handler)
 
-    # --- Обработчики CallbackQuery для навигации ---
-    # Статистика и пользователи
+    # --- Статистика и пользователи ---
     application.add_handler(CallbackQueryHandler(stats.show_stats_panel, pattern="^back_to_stats_panel$"))
     application.add_handler(CallbackQueryHandler(stats.show_users_list, pattern="^users_list_page_"))
     application.add_handler(CallbackQueryHandler(stats.view_user_profile, pattern="^admin_view_user_"))
     application.add_handler(CallbackQueryHandler(stats.show_user_activity, pattern="^admin_activity_"))
     application.add_handler(CallbackQueryHandler(stats.ask_for_delete_confirmation, pattern="^admin_delete_user_"))
     application.add_handler(CallbackQueryHandler(stats.process_delete_confirmation, pattern="^admin_confirm_delete_"))
+    application.add_handler(CallbackQueryHandler(stats.show_ratings_history, pattern="^ratings_page_"))
 
-    # Книги
+    # --- Книги ---
     application.add_handler(CallbackQueryHandler(books.show_books_list, pattern="^books_page_"))
     application.add_handler(CallbackQueryHandler(books.show_book_details, pattern="^admin_view_book_"))
     application.add_handler(CallbackQueryHandler(books.ask_for_book_delete_confirmation, pattern="^admin_delete_book_"))
     application.add_handler(CallbackQueryHandler(books.process_book_delete, pattern="^admin_confirm_book_delete_"))
-    application.add_handler(bulk_add_books_handler)
+
+    # --- Запросы на книги ---
     application.add_handler(CallbackQueryHandler(requests.show_book_requests, pattern="^view_requests$"))
     application.add_handler(CallbackQueryHandler(requests.view_book_request, pattern="^view_request_"))
     application.add_handler(CallbackQueryHandler(requests.approve_request_and_add_book, pattern="^approve_request_"))
     application.add_handler(CallbackQueryHandler(requests.reject_book_request, pattern="^reject_request_"))
-    application.add_handler(CallbackQueryHandler(stats.show_ratings_history, pattern="^ratings_page_"))
 
     logger.info("Админ-бот инициализирован и готов к запуску.")
     
-    # Запускаем бота асинхронно
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
