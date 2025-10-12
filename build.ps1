@@ -21,245 +21,173 @@ function Write-Warning { Write-Host $args -ForegroundColor Yellow }
 function Write-Error { Write-Host $args -ForegroundColor Red }
 
 # ============================================================================
-# ОСНОВНЫЕ КОМАНДЫ
+# ВНУТРЕННИЕ HELPER-ФУНКЦИИ (для переиспользования кода)
+# ============================================================================
+
+# Эта функция инкапсулирует логику полного сброса и инициализации БД
+function _Initialize-Database {
+    Write-Info ">>> Запуск базы данных..."
+    & $DOCKER_COMPOSE up -d $DB_SERVICE
+    
+    Write-Warning ">>> Ожидание запуска БД (10 секунд)..."
+    Start-Sleep -Seconds 10
+    
+    Write-Info ">>> Инициализация таблиц и данных через init_db.py..."
+    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/init_db.py
+}
+
+
+# ============================================================================
+# ОСНОВНЫE КОМАНДЫ
 # ============================================================================
 
 function Show-Help {
     Write-Success "`nДоступные команды:"
     Write-Host ""
-    Write-Host "  init              " -ForegroundColor Yellow -NoNewline; Write-Host "Полная инициализация проекта"
-    Write-Host "  build             " -ForegroundColor Yellow -NoNewline; Write-Host "Собрать Docker образы"
-    Write-Host "  up                " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить все контейнеры"
-    Write-Host "  up-build          " -ForegroundColor Yellow -NoNewline; Write-Host "Собрать и запустить"
-    Write-Host "  dev               " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить с выводом логов"
-    Write-Host "  down              " -ForegroundColor Yellow -NoNewline; Write-Host "Остановить контейнеры"
-    Write-Host "  down-v            " -ForegroundColor Yellow -NoNewline; Write-Host "Остановить и удалить volumes"
-    Write-Host "  restart           " -ForegroundColor Yellow -NoNewline; Write-Host "Перезапустить контейнеры"
-    Write-Host "  restart-bots      " -ForegroundColor Yellow -NoNewline; Write-Host "Перезапустить только боты"
-    Write-Host "  logs              " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи всех сервисов"
-    Write-Host "  logs-bots         " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи ботов"
-    Write-Host "  logs-db           " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи БД"
-    Write-Host "   logs-celery       " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи Celery"
-    Write-Host "   logs-redis        " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи Redis"
-    Write-Host "   logs-celery-beat  " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи Celery Beat"
-    Write-Host "  ps                " -ForegroundColor Yellow -NoNewline; Write-Host "Статус контейнеров"
-    Write-Host "  status            " -ForegroundColor Yellow -NoNewline; Write-Host "Детальный статус"
-    Write-Host "  shell             " -ForegroundColor Yellow -NoNewline; Write-Host "Открыть bash в контейнере ботов"
-    Write-Host "  db-start          " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить только БД"
-    Write-Host "  db-init           " -ForegroundColor Yellow -NoNewline; Write-Host "Инициализировать БД"
-    Write-Host "  db-reset          " -ForegroundColor Yellow -NoNewline; Write-Host "Полный сброс БД"
-    Write-Host "  db-shell          " -ForegroundColor Yellow -NoNewline; Write-Host "Открыть psql shell"
-    Write-Host "  db-backup         " -ForegroundColor Yellow -NoNewline; Write-Host "Создать бэкап БД"
-    Write-Host "  clean             " -ForegroundColor Yellow -NoNewline; Write-Host "Очистить проект"
-    Write-Host "  clean-all         " -ForegroundColor Yellow -NoNewline; Write-Host "Полная очистка с образами"
-    Write-Host "  test              " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить тесты"
-    Write-Host "  run-library       " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить library_bot"
-    Write-Host "  run-admin         " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить admin_bot"
-    Write-Host "  health-check      " -ForegroundColor Yellow -NoNewline; Write-Host "Проверка здоровья системы"
-    Write-Host "  quick-restart     " -ForegroundColor Yellow -NoNewline; Write-Host "Быстрый перезапуск ботов"
-    Write-Host "  fresh-start       " -ForegroundColor Yellow -NoNewline; Write-Host "Свежий старт проекта"
-    Write-Host "  deploy            " -ForegroundColor Yellow -NoNewline; Write-Host "Деплой проекта"
+    Write-Host "--- Жизненный цикл ---"
+    Write-Host "  up               " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить все контейнеры в фоне"
+    Write-Host "  up-build         " -ForegroundColor Yellow -NoNewline; Write-Host "Собрать образы и запустить контейнеры"
+    Write-Host "  down             " -ForegroundColor Yellow -NoNewline; Write-Host "Остановить контейнеры"
+    Write-Host "  down-v           " -ForegroundColor Yellow -NoNewline; Write-Host "Остановить контейнеры и удалить volumes"
+    Write-Host "  build            " -ForegroundColor Yellow -NoNewline; Write-Host "Собрать или пересобрать образы"
+    Write-Host "  restart [svc..]  " -ForegroundColor Yellow -NoNewline; Write-Host "Перезапустить все или указанные сервисы (напр. 'dk restart bots')"
+    Write-Host "  dev              " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить в режиме разработки с выводом логов"
     Write-Host ""
-    Write-Info "Использование: .\build.ps1 <команда>"
+    Write-Host "--- Отладка и мониторинг ---"
+    Write-Host "  logs [svc..]     " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи всех или указанных сервисов (напр. 'dk logs bots db')"
+    Write-Host "  ps               " -ForegroundColor Yellow -NoNewline; Write-Host "Показать статус запущенных контейнеров"
+    Write-Host "  status           " -ForegroundColor Yellow -NoNewline; Write-Host "Показать детальный статус проекта (контейнеры, образы, volumes)"
+    Write-Host ""
+    Write-Host "--- Взаимодействие и утилиты ---"
+    Write-Host "  shell            " -ForegroundColor Yellow -NoNewline; Write-Host "Открыть интерактивную shell-сессию в контейнере ботов"
+    Write-Host "  run <cmd>        " -ForegroundColor Yellow -NoNewline; Write-Host "Выполнить любую команду в контейнере ботов (напр. 'dk run pip freeze')"
+    Write-Host "  test             " -ForegroundColor Yellow -NoNewline; Write-Host "Запустить тесты (pytest)"
+    Write-Host ""
+    Write-Host "--- Управление Базой Данных ---"
+    Write-Host "  db-shell         " -ForegroundColor Yellow -NoNewline; Write-Host "Открыть psql shell для подключения к БД"
+    Write-Host "  db-backup        " -ForegroundColor Yellow -NoNewline; Write-Host "Создать бэкап базы данных"
+    Write-Host "  db-restore       " -ForegroundColor Yellow -NoNewline; Write-Host "Восстановить БД из последнего бэкапа"
+    Write-Host ""
+    Write-Host "--- Полная перезагрузка проекта ---"
+    Write-Host "  recreate         " -ForegroundColor Yellow -NoNewline; Write-Host "✨ Полностью пересоздать проект (down -v, build, up, init_db)"
+    Write-Host "  deploy           " -ForegroundColor Yellow -NoNewline; Write-Host "Выкатить обновления кода без потери данных в БД"
+    Write-Host ""
+    Write-Host "--- Очистка ---"
+    Write-Host "  prune            " -ForegroundColor Yellow -NoNewline; Write-Host "🗑️ Очистить Docker от всего мусора (контейнеры, сети, образы)"
+    Write-Host ""
+    Write-Info "Использование: dk <команда> [аргументы]"
     Write-Host ""
 }
 
-function Invoke-Init {
-    Write-Info ">>> Шаг 1: Остановка и очистка контейнеров..."
-    & $DOCKER_COMPOSE down -v
-    
-    Write-Info ">>> Шаг 2: Запуск базы данных..."
-    & $DOCKER_COMPOSE up -d $DB_SERVICE
-    
-    Write-Warning ">>> Ожидание запуска БД (10 секунд)..."
-    Start-Sleep -Seconds 10
-    
-    Write-Info ">>> Шаг 3: Инициализация таблиц и данных..."
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/init_db.py
-    
-    Write-Info ">>> Шаг 4: Запуск всех контейнеров..."
-    & $DOCKER_COMPOSE up --build -d
-    
-    Write-Success "✓ Проект успешно инициализирован!"
-}
-
-function Invoke-Build {
-    Write-Info ">>> Сборка образов..."
-    & $DOCKER_COMPOSE build
-}
-
-function Invoke-Up {
-    Write-Info ">>> Запуск контейнеров..."
-    & $DOCKER_COMPOSE up -d
-}
-
-function Invoke-UpBuild {
-    Write-Info ">>> Сборка и запуск контейнеров..."
-    & $DOCKER_COMPOSE up --build -d
-}
-
-function Invoke-Dev {
-    Write-Info ">>> Запуск в режиме разработки..."
-    & $DOCKER_COMPOSE up --build
-}
-
-function Invoke-Down {
-    Write-Warning ">>> Остановка контейнеров..."
-    & $DOCKER_COMPOSE down
-}
-
-function Invoke-DownV {
-    Write-Error ">>> Остановка и удаление volumes..."
-    & $DOCKER_COMPOSE down -v
-}
+# --- Жизненный цикл ---
+function Invoke-Up { & $DOCKER_COMPOSE up -d }
+function Invoke-UpBuild { & $DOCKER_COMPOSE up --build -d }
+function Invoke-Down { & $DOCKER_COMPOSE down }
+function Invoke-DownV { & $DOCKER_COMPOSE down -v }
+function Invoke-Build { & $DOCKER_COMPOSE build $Args }
+function Invoke-Dev { & $DOCKER_COMPOSE up --build }
 
 function Invoke-Restart {
-    Write-Info ">>> Перезапуск контейнеров..."
-    & $DOCKER_COMPOSE restart
+    Write-Info ">>> Перезапуск сервисов: $($Args -join ', ' | ForEach-Object { if ($_ -eq '') { 'все' } else { $_ } })"
+    & $DOCKER_COMPOSE restart $Args
 }
 
-function Invoke-RestartBots {
-    Write-Info ">>> Перезапуск ботов..."
-    & $DOCKER_COMPOSE restart $BOTS_SERVICE
-}
+# --- Отладка и мониторинг ---
+function Invoke-Ps { & $DOCKER_COMPOSE ps }
 
 function Invoke-Logs {
-    & $DOCKER_COMPOSE logs -f
-}
-
-function Invoke-LogsBots {
-    & $DOCKER_COMPOSE logs -f $BOTS_SERVICE
-}
-
-function Invoke-LogsDb {
-    & $DOCKER_COMPOSE logs -f $DB_SERVICE
-}
-
-function Invoke-LogsCelery {
-    & $DOCKER_COMPOSE logs -f $CELERY_WORKER
-}
-
-function Invoke-LogsRedis {
-    & $DOCKER_COMPOSE logs -f $REDIS_SERVICE
-}
-
-function Invoke-LogsCeleryBeat {
-    & $DOCKER_COMPOSE logs -f $CELERY_BEAT
-}
-
-function Invoke-Ps {
-    & $DOCKER_COMPOSE ps
+    Write-Info ">>> Показ логов для сервисов: $($Args -join ', ' | ForEach-Object { if ($_ -eq '') { 'все' } else { $_ } })"
+    & $DOCKER_COMPOSE logs -f $Args
 }
 
 function Invoke-Status {
-    Write-Success "=== Docker контейнеры ==="
-    & $DOCKER_COMPOSE ps
-    Write-Host ""
-    Write-Success "=== Docker образы ==="
-    docker images | Select-String "mypersonal"
-    Write-Host ""
-    Write-Success "=== Docker volumes ==="
-    docker volume ls | Select-String "mypersonal"
+    Write-Success "=== Docker контейнеры ==="; & $DOCKER_COMPOSE ps
+    Write-Host ""; Write-Success "=== Docker образы проекта ==="; docker images | Select-String "mypersonal"
+    Write-Host ""; Write-Success "=== Docker volumes проекта ==="; docker volume ls | Select-String "mypersonal"
 }
 
-function Invoke-Shell {
-    & $DOCKER_COMPOSE exec $BOTS_SERVICE /bin/bash
+# --- Взаимодействие и утилиты ---
+function Invoke-Shell { & $DOCKER_COMPOSE exec $BOTS_SERVICE /bin/bash }
+function Invoke-Test { & $DOCKER_COMPOSE run --rm $BOTS_SERVICE pytest tests/ }
+
+function Invoke-Run {
+    if ($Args.Length -eq 0) {
+        Write-Error "Необходимо указать команду для выполнения. Пример: dk run python src/health_check.py"
+        return
+    }
+    Write-Info ">>> Выполнение команды в контейнере '$BOTS_SERVICE': $($Args -join ' ')"
+    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE $Args
 }
 
-function Invoke-DbStart {
-    Write-Info ">>> Запуск базы данных..."
-    & $DOCKER_COMPOSE up -d $DB_SERVICE
-}
-
-function Invoke-DbInit {
-    Write-Info ">>> Инициализация базы данных..."
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/init_db.py
-}
-
-function Invoke-DbReset {
-    Write-Error ">>> Внимание! Все данные будут удалены!"
-    Write-Warning ">>> Остановка и удаление volumes..."
-    & $DOCKER_COMPOSE down -v
-    
-    Write-Info ">>> Запуск пустой БД..."
-    & $DOCKER_COMPOSE up -d $DB_SERVICE
-    
-    Write-Warning ">>> Ожидание запуска БД (10 секунд)..."
-    Start-Sleep -Seconds 10
-    
-    Write-Info ">>> Создание таблиц и заполнение данных..."
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/init_db.py
-    
-    Write-Success "✓ База данных сброшена и инициализирована!"
-}
-
+# --- Управление Базой Данных ---
 function Invoke-DbShell {
-    $dbName = $env:DB_NAME
-    if (-not $dbName) { $dbName = "library_db" }
+    $dbName = $env:DB_NAME; if (-not $dbName) { $dbName = "library_db" }
     & $DOCKER_COMPOSE exec $DB_SERVICE psql -U postgres -d $dbName
 }
 
 function Invoke-DbBackup {
-    Write-Info ">>> Создание бэкапа..."
-    New-Item -ItemType Directory -Force -Path "backups" | Out-Null
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $dbName = $env:DB_NAME
-    if (-not $dbName) { $dbName = "library_db" }
-    
+    Write-Info ">>> Создание бэкапа..."; New-Item -ItemType Directory -Force -Path "backups" | Out-Null
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"; $dbName = $env:DB_NAME; if (-not $dbName) { $dbName = "library_db" }
     $containerId = (& $DOCKER_COMPOSE ps -q $DB_SERVICE)
     docker exec $containerId pg_dump -U postgres $dbName > "backups/backup_$timestamp.sql"
-    
     Write-Success "✓ Бэкап создан в папке backups/"
 }
 
-function Invoke-Clean {
-    Write-Warning ">>> Очистка проекта..."
+function Invoke-DbRestore {
+    Write-Info ">>> Восстановление базы данных из последнего бэкапа..."
+    $latestBackup = Get-ChildItem -Path "backups" -Filter "*.sql" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $latestBackup) { Write-Error "Бэкапы не найдены в папке /backups"; return }
+    Write-Warning "Найден последний бэкап: $($latestBackup.Name)"
+    Write-Error "Текущая база данных будет полностью УДАЛЕНА и заменена данными из бэкапа!"; Read-Host -Prompt "Нажмите Enter для продолжения..."
+    & $DOCKER_COMPOSE down -v --remove-orphans; Invoke-Up
+    Write-Warning "Ожидание запуска БД (15 секунд)..."; Start-Sleep -Seconds 15
+    $dbName = $env:DB_NAME; if (-not $dbName) { $dbName = "library_db" }
+    Write-Info ">>> Загрузка данных из бэкапа..."; Get-Content $latestBackup.FullName | docker exec -i $($DOCKER_COMPOSE ps -q $DB_SERVICE) psql -U postgres -d $dbName
+    Write-Success "✓ База данных успешно восстановлена из файла $($latestBackup.Name)!"
+}
+
+# --- Полная перезагрузка и деплой ---
+
+function Invoke-Recreate {
+    Write-Info ">>> ✨ Полное пересоздание проекта с нуля..."
+    
+    Write-Warning "Шаг 1: Остановка и удаление всех контейнеров и volumes..."
     & $DOCKER_COMPOSE down -v
-}
-
-function Invoke-CleanAll {
-    Write-Error ">>> Полная очистка проекта..."
-    & $DOCKER_COMPOSE down -v --rmi all
-}
-
-function Invoke-Test {
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE pytest tests/
-}
-
-function Invoke-RunLibrary {
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/library_bot/main.py
-}
-
-function Invoke-RunAdmin {
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/admin_bot/main.py
-}
-
-function Invoke-HealthCheck {
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/health_check.py
-}
-
-function Invoke-QuickRestart {
-    Write-Info ">>> Быстрый перезапуск ботов..."
-    & $DOCKER_COMPOSE restart $BOTS_SERVICE
-    Write-Success "✓ Боты перезапущены!"
-}
-
-function Invoke-FreshStart {
-    Write-Info ">>> Свежий старт проекта..."
-    Invoke-DownV
-    Invoke-Init
-    Write-Success "✓ Проект готов к работе!"
+    
+    Write-Info "Шаг 2: Сборка свежих образов..."
+    & $DOCKER_COMPOSE build
+    
+    # Шаг 3: Используем хелпер для инициализации БД
+    _Initialize-Database
+    
+    Write-Info "Шаг 4: Запуск всех остальных сервисов..."
+    & $DOCKER_COMPOSE up -d
+    
+    Write-Success "✓ Проект успешно пересоздан и запущен!"
+    & $DOCKER_COMPOSE ps
 }
 
 function Invoke-Deploy {
-    Write-Info ">>> Деплой проекта..."
+    Write-Info ">>> Деплой обновлений кода (БД не затрагивается)..."
+    Write-Warning "Остановка текущих сервисов..."
     & $DOCKER_COMPOSE down
+    
+    Write-Info "Сборка новых образов..."
     & $DOCKER_COMPOSE build
-    & $DOCKER_COMPOSE up -d $DB_SERVICE
-    Start-Sleep -Seconds 10
-    & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/init_db.py
+    
+    Write-Info "Запуск обновленных сервисов..."
     & $DOCKER_COMPOSE up -d
     Write-Success "✓ Деплой завершен!"
+}
+
+# --- Очистка ---
+
+function Invoke-Prune {
+    Write-Warning ">>> 🗑️  Полная очистка Docker от неиспользуемых данных..."
+    Write-Error "Будут удалены все остановленные контейнеры, неиспользуемые сети, dangling-образы и кэш сборки."
+    Read-Host -Prompt "Нажмите Enter для продолжения..."
+    docker system prune -af
+    Write-Success "✓ Система Docker очищена!"
 }
 
 # ============================================================================
@@ -267,39 +195,38 @@ function Invoke-Deploy {
 # ============================================================================
 
 switch ($Command.ToLower()) {
-    "help" { Show-Help }
-    "init" { Invoke-Init }
-    "build" { Invoke-Build }
+    # Жизненный цикл
     "up" { Invoke-Up }
     "up-build" { Invoke-UpBuild }
-    "dev" { Invoke-Dev }
     "down" { Invoke-Down }
     "down-v" { Invoke-DownV }
+    "build" { Invoke-Build }
     "restart" { Invoke-Restart }
-    "restart-bots" { Invoke-RestartBots }
+    "dev" { Invoke-Dev }
+
+    # Отладка
     "logs" { Invoke-Logs }
-    "logs-bots" { Invoke-LogsBots }
-    "logs-db" { Invoke-LogsDb }
-    "logs-celery" { Invoke-LogsCelery }
-    "logs-redis" { Invoke-LogsRedis }
-    "logs-celery-beat" { Invoke-LogsCeleryBeat }
     "ps" { Invoke-Ps }
     "status" { Invoke-Status }
+
+    # Взаимодействие
     "shell" { Invoke-Shell }
-    "db-start" { Invoke-DbStart }
-    "db-init" { Invoke-DbInit }
-    "db-reset" { Invoke-DbReset }
+    "run" { Invoke-Run }
+    "test" { Invoke-Test }
+
+    # Управление БД
     "db-shell" { Invoke-DbShell }
     "db-backup" { Invoke-DbBackup }
-    "clean" { Invoke-Clean }
-    "clean-all" { Invoke-CleanAll }
-    "test" { Invoke-Test }
-    "run-library" { Invoke-RunLibrary }
-    "run-admin" { Invoke-RunAdmin }
-    "health-check" { Invoke-HealthCheck }
-    "quick-restart" { Invoke-QuickRestart }
-    "fresh-start" { Invoke-FreshStart }
+    "db-restore" { Invoke-DbRestore }
+
+    # Перезагрузка
+    "recreate" { Invoke-Recreate }
     "deploy" { Invoke-Deploy }
+
+    # Очистка
+    "prune" { Invoke-Prune }
+    
+    "help" { Show-Help }
     default {
         Write-Error "Неизвестная команда: $Command"
         Show-Help
