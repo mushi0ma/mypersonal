@@ -391,7 +391,7 @@ bulk_add_books_handler = ConversationHandler(
     ],
     states={
         AdminState.BULK_ADD_WAITING_FILE: [
-            MessageHandler(filters.Document.CSV, process_bulk_add_csv)
+            MessageHandler(filters.Document.FileExtension('csv'), process_bulk_add_csv)
         ]
     },
     fallbacks=[
