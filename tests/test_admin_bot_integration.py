@@ -139,8 +139,8 @@ async def test_add_book_flow(db_session, monkeypatch, mock_context, patched_admi
     last_call = update.message.reply_text.call_args_list[-1]
     call_args, call_kwargs = last_call
 
-    # Now, perform the checks on the last message
-    assert "🔍 Проверьте данные" in call_kwargs['text']
+    # Теперь проверяем аргументы правильно
+    assert "🔍 Проверьте данные" in call_args[0]  # ✅ Ищем текст в позиционных аргументах
     assert call_kwargs['parse_mode'] == 'Markdown'
 
     # Step 7: Save the book
