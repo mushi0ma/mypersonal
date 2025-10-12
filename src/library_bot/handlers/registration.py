@@ -73,17 +73,17 @@ async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Получает ФИО и запрашивает дату рождения."""
     context.user_data['registration']['full_name'] = update.message.text
-    await update.message.reply_text("🎂 Введите **дату рождения** (ДД.ММ.ГГГГ):", parse_mode='Markdown')
+    await update.message.reply_text("🎂 Введите **дату рождения** (ДД.ММ.ГГГГ):\n\n/cancel для отмены", parse_mode='Markdown')
     return State.REGISTER_DOB
 
 async def get_dob(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
     """Получает дату рождения и запрашивает контакт."""
     dob = update.message.text
     if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", dob):
-        await update.message.reply_text("❌ Неверный формат. Используйте **ДД.ММ.ГГГГ**.")
+        await update.message.reply_text("❌ Неверный формат. Используйте **ДД.ММ.ГГГГ**.\n\n/cancel для отмены")
         return State.REGISTER_DOB
     context.user_data['registration']['dob'] = dob
-    await update.message.reply_text("📞 Введите ваш **контакт** (email, телефон или @username):", parse_mode='Markdown')
+    await update.message.reply_text("📞 Введите ваш **контакт** (email, телефон или @username):\n\n/cancel для отмены", parse_mode='Markdown')
     return State.REGISTER_CONTACT
 
 async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
@@ -227,12 +227,17 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         )
         return State.AWAITING_NOTIFICATION_BOT
 
-    except db_data.UserExistsError:
+    except db_data.UserExistsError as e:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="❌ Ошибка: этот username или контакт уже заняты."
+            text=f"❌ Ошибка: {e} Попробуйте другой."
         )
-        return ConversationHandler.END
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="🧑‍💻 Придумайте **юзернейм** (на английском, без пробелов):",
+            parse_mode='Markdown'
+        )
+        return State.REGISTER_USERNAME
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}", exc_info=True)
         tasks.notify_admin.delay(

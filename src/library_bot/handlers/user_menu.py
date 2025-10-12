@@ -32,8 +32,16 @@ async def user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State
 
     try:
         async with get_db_connection() as conn:
-            context.user_data['current_user'] = await db_data.get_user_by_id(conn, user['id'])
-            user = context.user_data['current_user']
+            user = await db_data.get_user_by_id(conn, user['id'])
+            context.user_data['current_user'] = user
+
+            if user.get('force_logout'):
+                await conn.execute("UPDATE users SET force_logout = FALSE WHERE id = $1", user['id'])
+                await update.effective_message.reply_text("Администратор завершил ваш сеанс.")
+                context.user_data.clear()
+                from src.library_bot.handlers.start import start
+                return await start(update, context)
+
             borrowed_books = await db_data.get_borrowed_books(conn, user['id'])
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных для меню пользователя {user['id']}: {e}")

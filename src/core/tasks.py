@@ -79,12 +79,11 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
         if conn:
             await conn.close()
 
-async def _async_notify_admin(text: str, category: str = 'audit'):
-    """Улучшенная логика отправки уведомлений админу с Telegram ID."""
+async def _async_notify_admin(text: str, category: str = 'audit', user_id: int | None = None):
+    """Улучшенная логика отправки уведомлений админу с Telegram ID и кнопками."""
     try:
         admin_notifier_bot = telegram.Bot(token=config.ADMIN_NOTIFICATION_BOT_TOKEN)
         
-        # Добавляем метаданные к уведомлению
         timestamp = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
         formatted_text = (
             f"🔔 **Уведомление:** `{category}`\n"
@@ -93,10 +92,19 @@ async def _async_notify_admin(text: str, category: str = 'audit'):
             f"{text}"
         )
         
+        reply_markup = None
+        if user_id:
+            keyboard = [[
+                telegram.InlineKeyboardButton("👤 Профиль", callback_data=f"admin_view_user_{user_id}"),
+                telegram.InlineKeyboardButton("🚫 Забанить", callback_data=f"admin_ban_user_{user_id}")
+            ]]
+            reply_markup = telegram.InlineKeyboardMarkup(keyboard)
+
         await admin_notifier_bot.send_message(
             chat_id=config.ADMIN_TELEGRAM_ID,
             text=formatted_text,
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=reply_markup
         )
         
         logger.info(f"Аудит-уведомление '{category}' для админа отправлено.")
@@ -112,9 +120,9 @@ def notify_user(user_id: int, text: str, category: str = 'system', button_text: 
     asyncio.run(_async_notify_user(user_id, text, category, button_text, button_callback))
 
 @celery_app.task
-def notify_admin(text: str, category: str = 'audit'):
+def notify_admin(text: str, category: str = 'audit', user_id: int | None = None):
     """Синхронная Celery задача для отправки уведомления админу."""
-    asyncio.run(_async_notify_admin(text, category))
+    asyncio.run(_async_notify_admin(text, category, user_id))
 
 
 # --- ВЫСОКОУРОВНЕВЫЕ И ПЕРИОДИЧЕСКИЕ ЗАДАЧИ ---

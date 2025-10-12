@@ -3,6 +3,7 @@ import os
 import logging
 import asyncpg
 from redis import Redis
+import telegram
 from src.core import config
 
 logging.basicConfig(level=logging.INFO)
@@ -17,8 +18,9 @@ async def check_database():
             database=config.DB_NAME,
             host=config.DB_HOST,
             port=config.DB_PORT,
-            timeout=5  # 5-секундный таймаут
+            timeout=5
         )
+        await conn.fetchval("SELECT 1")
         await conn.close()
         return True, "Database connection successful."
     except Exception as e:
@@ -29,20 +31,31 @@ def check_redis():
     """Проверяет соединение с Redis."""
     try:
         redis_host = config.CELERY_BROKER_URL.split('//')[1].split(':')[0]
-        r = Redis(host=redis_host, port=6379, socket_connect_timeout=5)
+        r = Redis.from_url(config.CELERY_BROKER_URL, socket_connect_timeout=5)
         r.ping()
         return True, "Redis connection successful."
     except Exception as e:
         logger.error(f"Redis health check failed: {e}")
         return False, str(e)
 
+async def check_telegram_api():
+    """Проверяет доступность API Telegram."""
+    try:
+        bot = telegram.Bot(token=config.TELEGRAM_BOT_TOKEN)
+        await bot.get_me()
+        return True, "Telegram API connection successful."
+    except Exception as e:
+        logger.error(f"Telegram API health check failed: {e}")
+        return False, str(e)
+
 async def run_health_check():
     """Запускает все проверки и возвращает общий статус."""
     db_ok, db_msg = await check_database()
     redis_ok, redis_msg = check_redis()
+    telegram_ok, telegram_msg = await check_telegram_api()
 
-    all_ok = db_ok and redis_ok
-    message = f"DB: {db_msg} | Redis: {redis_msg}"
+    all_ok = db_ok and redis_ok and telegram_ok
+    message = f"DB: {db_msg} | Redis: {redis_msg} | Telegram: {telegram_msg}"
     
     if all_ok:
         logger.info("Health check passed.")

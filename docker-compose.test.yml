@@ -5,10 +5,24 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "5434:5432"
     volumes:
       - test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  test-runner:
+    build: .
+    command: ["python", "-m", "pytest"]
+    volumes:
+      - .:/app
+    env_file:
+      - .env.test
+    depends_on:
+      test_db:
+        condition: service_healthy
 
 volumes:
   test_postgres_data:
