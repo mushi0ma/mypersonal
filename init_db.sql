@@ -28,7 +28,9 @@ CREATE TABLE IF NOT EXISTS users (
     status VARCHAR(50),
     password_hash VARCHAR(255) NOT NULL,
     registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    registration_code VARCHAR(36) UNIQUE
+    registration_code VARCHAR(36) UNIQUE,
+    is_banned BOOLEAN DEFAULT FALSE,
+    force_logout BOOLEAN DEFAULT FALSE
 );
 
 -- Таблица заимствованных книг

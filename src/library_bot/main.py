@@ -20,6 +20,7 @@ from src.library_bot.handlers import (
     registration,
     user_menu,
     books,
+    help as help_handler,
 )
 
 # Настройка логирования
@@ -64,7 +65,10 @@ async def main() -> None:
             State.REGISTER_DOB: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration.get_dob)],
             State.REGISTER_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration.get_contact)],
             State.REGISTER_VERIFY_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration.verify_registration_code)],
-            State.REGISTER_STATUS: [CallbackQueryHandler(registration.get_status, pattern=r"^(студент|учитель)$")],
+            State.REGISTER_STATUS: [
+                CallbackQueryHandler(registration.get_status, pattern=r"^(студент|учитель)$"),
+                CallbackQueryHandler(start.start, pattern="^back_to_start$")
+            ],
             State.REGISTER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration.get_username)],
             State.REGISTER_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration.get_password)],
             State.REGISTER_CONFIRM_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, registration.get_password_confirmation)],
@@ -167,6 +171,7 @@ async def main() -> None:
         per_chat=True
     )
 
+    application.add_handler(CommandHandler("help", help_handler.show_help))
     application.add_handler(conv_handler)
     logger.info("Основной бот инициализирован и готов к запуску...")
     

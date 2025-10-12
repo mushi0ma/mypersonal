@@ -5,6 +5,9 @@ class AdminState(Enum):
     Перечисление для состояний ConversationHandler в админ-боте.
     """
     # --- Рассылка ---
+    BROADCAST_TYPE = auto()
+    BROADCAST_SELECT_USERS = auto()
+    BROADCAST_CONFIRM = auto()
     BROADCAST_MESSAGE = auto()
 
     # --- Редактирование книги ---

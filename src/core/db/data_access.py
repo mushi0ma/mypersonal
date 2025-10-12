@@ -59,6 +59,8 @@ async def get_user_by_login(conn: asyncpg.Connection, login_query: str) -> dict:
     )
     if not row:
         raise NotFoundError("Пользователь с таким логином не найден.")
+    if row['is_banned']:
+        raise NotFoundError("Этот пользователь забанен.")
     return _record_to_dict(row)
 
 async def get_user_by_id(conn: asyncpg.Connection, user_id: int) -> dict:
@@ -131,6 +133,24 @@ async def delete_user_by_admin(conn: asyncpg.Connection, user_id: int):
             "UPDATE users SET username = $1, full_name = '(удален админом)', contact_info = $2, password_hash = 'deleted', status = 'deleted', telegram_id = NULL, telegram_username = NULL WHERE id = $3",
             anonymized_username, anonymized_username, user_id
         )
+
+async def ban_user(conn: asyncpg.Connection, user_id: int):
+    """Банит пользователя по ID."""
+    result = await conn.execute("UPDATE users SET is_banned = TRUE WHERE id = $1", user_id)
+    if int(result.split()[-1]) == 0:
+        raise NotFoundError("Пользователь для бана не найден.")
+
+async def unban_user(conn: asyncpg.Connection, user_id: int):
+    """Разбанивает пользователя по ID."""
+    result = await conn.execute("UPDATE users SET is_banned = FALSE WHERE id = $1", user_id)
+    if int(result.split()[-1]) == 0:
+        raise NotFoundError("Пользователь для разбана не найден.")
+
+async def set_force_logout(conn: asyncpg.Connection, user_id: int):
+    """Устанавливает флаг принудительного выхода для пользователя."""
+    result = await conn.execute("UPDATE users SET force_logout = TRUE WHERE id = $1", user_id)
+    if int(result.split()[-1]) == 0:
+        raise NotFoundError("Пользователь для kick'а не найден.")
 
 async def delete_user_by_self(conn: asyncpg.Connection, user_id: int) -> str:
     """Анонимизирует пользователя по его собственной просьбе."""

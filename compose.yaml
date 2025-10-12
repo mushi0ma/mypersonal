@@ -28,6 +28,8 @@ services:
   bots:
     build: .
     restart: always
+    networks:
+      - app-network
     command: python src/main.py
     volumes:
       - .:/app
@@ -80,6 +82,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   postgres_data:

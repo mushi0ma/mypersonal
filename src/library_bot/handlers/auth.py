@@ -92,7 +92,8 @@ async def check_login_password(update: Update, context: ContextTypes.DEFAULT_TYP
 
             tasks.notify_admin.delay(
                 text=f"🔒 **[АУДИТ БЕЗОПАСНОСТИ]**\n\nЗамечено {attempts} неудачных попытки входа для пользователя @{user.get('username', user.get('contact_info'))}. Вход заблокирован на 5 минут.",
-                category='security_alert'
+                category='security_alert',
+                user_id=user_id
             )
 
             context.user_data.pop('login_attempts', None)

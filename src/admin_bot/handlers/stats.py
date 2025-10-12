@@ -78,6 +78,19 @@ async def show_users_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка при получении списка пользователей: {e}", exc_info=True)
         await query.edit_message_text(f"❌ Ошибка: {e}")
 
+def get_contact_type(contact_info: str) -> str:
+    """Определяет тип контакта на основе его формата."""
+    if not contact_info:
+        return "Не указан"
+    if contact_info.startswith('@'):
+        return "Telegram Username"
+    if contact_info.isdigit():
+        return "Телефон"
+    if '@' in contact_info and '.' in contact_info:
+        return "Email"
+    return "Контакт"
+
+
 async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает детальную карточку пользователя для админа."""
     query = update.callback_query
@@ -93,7 +106,9 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reg_date = user['registration_date'].strftime("%d.%m.%Y %H:%M")
         age = calculate_age(user.get('dob'))
-        
+        contact_info = user.get('contact_info', 'Не указан')
+        contact_type = get_contact_type(contact_info)
+
         message_parts = [
             "👤 **Карточка пользователя** 👤",
             "`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`",
@@ -101,9 +116,8 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔹 **Username:** `{user['username']}`",
             f"🔹 **Возраст:** `{age}`",
             f"🔹 **Статус:** `{user['status']}`",
-            f"🔹 **Контакт:** `{user['contact_info']}`",
-            f"🔹 **Telegram ID:** `{user.get('telegram_id', 'Не привязан')}`",
-            f"🔹 **Telegram Username:** `@{user.get('telegram_username', 'Не указан')}`",
+            f"🔹 **{contact_type}:** `{contact_info}`",
+            f"🔹 **Telegram ID:** `{user.get('telegram_id') or 'Не привязан'}`",
             f"🔹 **Регистрация:** `{reg_date}`",
             "`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`",
             f"📚 **Книг на руках:** {len(borrowed_now)}",
@@ -121,7 +135,7 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for item in borrow_history[:5]:
                 message_parts.append(f"  • `{item['book_name']}`")
 
-        reply_markup = keyboards.get_user_profile_keyboard(user_id, current_page)
+        reply_markup = keyboards.get_user_profile_keyboard(user, current_page)
         await query.edit_message_text(
             "\n".join(message_parts),
             reply_markup=reply_markup,
@@ -130,6 +144,40 @@ async def view_user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка при получении карточки пользователя: {e}", exc_info=True)
         await query.edit_message_text(f"❌ Ошибка: {e}")
+
+async def kick_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """'Выкидывает' пользователя, устанавливая флаг force_logout."""
+    query = update.callback_query
+    await query.answer()
+    user_id = int(query.data.split('_')[-1])
+    try:
+        async with get_db_connection() as conn:
+            await db_data.set_force_logout(conn, user_id)
+        await query.answer("✅ Пользователь будет отключен при следующем действии.", show_alert=True)
+        tasks.notify_admin.delay(text=f"👢 Админ 'кикнул' пользователя (ID: {user_id}).", category='admin_action')
+    except Exception as e:
+        await query.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+async def ban_unban_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Банит или разбанивает пользователя."""
+    query = update.callback_query
+    await query.answer()
+    user_id = int(query.data.split('_')[-1])
+    try:
+        async with get_db_connection() as conn:
+            user = await db_data.get_user_by_id(conn, user_id)
+            if user.get('is_banned'):
+                await db_data.unban_user(conn, user_id)
+                await query.answer("✅ Пользователь разбанен.", show_alert=True)
+                tasks.notify_admin.delay(text=f"🟢 Админ разбанил @{user.get('username', user_id)}.", category='admin_action')
+            else:
+                await db_data.ban_user(conn, user_id)
+                await query.answer("🚫 Пользователь забанен.", show_alert=True)
+                tasks.notify_admin.delay(text=f"🔴 Админ забанил @{user.get('username', user_id)}.", category='admin_action')
+        # Обновляем карточку пользователя, чтобы показать изменения
+        await view_user_profile(update, context)
+    except Exception as e:
+        await query.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 async def ask_for_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Спрашивает у админа подтверждение на удаление."""

@@ -52,6 +52,8 @@ async def main() -> None:
     application.add_handler(CallbackQueryHandler(stats.show_users_list, pattern="^users_list_page_"))
     application.add_handler(CallbackQueryHandler(stats.view_user_profile, pattern="^admin_view_user_"))
     application.add_handler(CallbackQueryHandler(stats.show_user_activity, pattern="^admin_activity_"))
+    application.add_handler(CallbackQueryHandler(stats.kick_user, pattern="^admin_kick_user_"))
+    application.add_handler(CallbackQueryHandler(stats.ban_unban_user, pattern="^admin_ban_user_"))
     application.add_handler(CallbackQueryHandler(stats.ask_for_delete_confirmation, pattern="^admin_delete_user_"))
     application.add_handler(CallbackQueryHandler(stats.process_delete_confirmation, pattern="^admin_confirm_delete_"))
     application.add_handler(CallbackQueryHandler(stats.show_ratings_history, pattern="^ratings_page_"))

@@ -23,11 +23,11 @@ async def db_session():
     conn = None
     try:
         conn = await asyncpg.connect(
-            database="library_db",
-            user="postgres",
-            password="12345",
-            host="test_db",
-            port="5432"
+            database=os.getenv("DB_NAME"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            host=os.getenv("DB_HOST"),
+            port=os.getenv("DB_PORT")
         )
         # Полная очистка и создание схемы для каждого теста
         await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
