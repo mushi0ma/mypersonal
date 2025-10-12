@@ -162,7 +162,7 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE) -> St
     return State.REGISTER_CONFIRM_PASSWORD
 
 async def get_password_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:
-    """Завершает регистрацию, создает пользователя и переводит на этап подписки."""
+    """Завершает регистрацию с улучшенным уведомлением админу."""
     password_confirm = update.message.text
     try:
         await update.message.delete()
@@ -177,23 +177,50 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         return State.REGISTER_PASSWORD
 
     context.user_data['registration']['password'] = context.user_data['registration'].pop('password_temp')
-    await context.bot.send_message(chat_id=update.effective_chat.id, text="✅ Пароль сохранен!\n\n⏳ Создаю ваш аккаунт...")
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="✅ Пароль сохранен!\n\n⏳ Создаю ваш аккаунт..."
+    )
 
     user_data = context.user_data['registration']
+    
     try:
         async with get_db_connection() as conn:
             user_id = await db_data.add_user(conn, user_data)
             await db_data.log_activity(conn, user_id=user_id, action="registration_start")
             reg_code = await db_data.set_registration_code(conn, user_id)
             context.user_data['user_id_for_activation'] = user_id
+            
+            # Получаем telegram_id нового пользователя для уведомления
+            telegram_id = update.effective_user.id
 
-        reply_markup = keyboards.get_notification_subscription_keyboard(config.NOTIFICATION_BOT_USERNAME, reg_code)
+        # Улучшенное уведомление админу
+        tasks.notify_admin.delay(
+            text=(
+                f"✅ **Новая регистрация**\n\n"
+                f"👤 **Имя:** `{user_data['full_name']}`\n"
+                f"🔹 **Username:** `{user_data['username']}`\n"
+                f"🔹 **Статус:** `{user_data['status']}`\n"
+                f"🔹 **Контакт:** `{user_data['contact_info']}`\n"
+                f"🆔 **Telegram ID:** `{telegram_id}`\n"
+                f"🆔 **User DB ID:** `{user_id}`\n"
+                f"📅 **Дата рождения:** `{user_data.get('dob', 'Не указано')}`"
+            ),
+            category='new_user'
+        )
+
+        reply_markup = keyboards.get_notification_subscription_keyboard(
+            config.NOTIFICATION_BOT_USERNAME, reg_code
+        )
+        
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text=(
                 "🎉 **Аккаунт создан.**\n\n"
-                "**Последний шаг:** подпишитесь на нашего бота-уведомителя для получения кодов и оповещений.\n\n"
-                "👉 Нажмите на кнопку ниже, запустите бота, а затем вернитесь сюда и нажмите **'Я подписался'**."
+                "**Последний шаг:** подпишитесь на нашего бота-уведомителя "
+                "для получения кодов и оповещений.\n\n"
+                "👉 Нажмите на кнопку ниже, запустите бота, а затем вернитесь сюда "
+                "и нажмите **'Я подписался'**."
             ),
             reply_markup=reply_markup,
             parse_mode='Markdown'
@@ -201,12 +228,20 @@ async def get_password_confirmation(update: Update, context: ContextTypes.DEFAUL
         return State.AWAITING_NOTIFICATION_BOT
 
     except db_data.UserExistsError:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Ошибка: этот юзернейм или контакт уже заняты.")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Ошибка: этот username или контакт уже заняты."
+        )
         return ConversationHandler.END
     except Exception as e:
         logger.error(f"Непредвиденная ошибка при регистрации: {e}", exc_info=True)
-        tasks.notify_admin.delay(text=f"❗️ **Критическая ошибка при регистрации**\n\n**Ошибка:** `{e}`")
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Произошла системная ошибка. Администратор уже уведомлен.")
+        tasks.notify_admin.delay(
+            text=f"❗️ **Критическая ошибка при регистрации**\n\n**Ошибка:** `{e}`"
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="❌ Произошла системная ошибка. Администратор уже уведомлен."
+        )
         return ConversationHandler.END
 
 async def check_notification_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> State:

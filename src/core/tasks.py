@@ -61,10 +61,25 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
         logger.error(f"Ошибка в _async_notify_user для user_id={user_id}: {e}", exc_info=True)
 
 async def _async_notify_admin(text: str, category: str = 'audit'):
-    """Асинхронная логика для отправки уведомления администратору."""
+    """Улучшенная логика отправки уведомлений админу с Telegram ID."""
     try:
         admin_notifier_bot = telegram.Bot(token=config.ADMIN_NOTIFICATION_BOT_TOKEN)
-        await admin_notifier_bot.send_message(chat_id=config.ADMIN_TELEGRAM_ID, text=text, parse_mode='Markdown')
+        
+        # Добавляем метаданные к уведомлению
+        timestamp = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
+        formatted_text = (
+            f"🔔 **Уведомление:** `{category}`\n"
+            f"🕐 **Время:** `{timestamp}`\n"
+            f"{'─' * 30}\n"
+            f"{text}"
+        )
+        
+        await admin_notifier_bot.send_message(
+            chat_id=config.ADMIN_TELEGRAM_ID,
+            text=formatted_text,
+            parse_mode='Markdown'
+        )
+        
         logger.info(f"Аудит-уведомление '{category}' для админа отправлено.")
     except Exception as e:
         logger.error(f"Ошибка в _async_notify_admin: {e}", exc_info=True)
