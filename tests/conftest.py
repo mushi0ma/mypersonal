@@ -23,10 +23,10 @@ async def db_session():
     conn = None
     try:
         conn = await asyncpg.connect(
-            database="test_db",
+            database="library_db",
             user="postgres",
             password="12345",
-            host="localhost",
+            host="db",
             port="5432"
         )
         # Полная очистка и создание схемы для каждого теста
