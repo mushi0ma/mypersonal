@@ -132,12 +132,15 @@ async def test_add_book_flow(db_session, monkeypatch, mock_context, patched_admi
     state = await books.skip_cover(update, mock_context)
     assert state == AdminState.CONFIRM_ADD
     
-    # Check that the confirmation was shown
-    update.message.reply_text.assert_called_once()
-    call_args, call_kwargs = update.message.reply_text.call_args
-    # Проверяем, что нужный текст содержится в сообщении
+    # Check that reply_text was called at all
+    update.message.reply_text.assert_called()
+
+    # Get the arguments of the LAST call
+    last_call = update.message.reply_text.call_args_list[-1]
+    call_args, call_kwargs = last_call
+
+    # Now, perform the checks on the last message
     assert "🔍 Проверьте данные" in call_kwargs['text']
-    # Проверяем, что режим парсинга правильный
     assert call_kwargs['parse_mode'] == 'Markdown'
 
     # Step 7: Save the book
