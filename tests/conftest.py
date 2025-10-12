@@ -26,7 +26,7 @@ async def db_session():
             database="library_db",
             user="postgres",
             password="12345",
-            host="db",
+            host="test_db",
             port="5432"
         )
         # Полная очистка и создание схемы для каждого теста
