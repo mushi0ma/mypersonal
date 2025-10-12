@@ -1,5 +1,23 @@
+x-common-app-config: &common-app-config
+  build: .
+  restart: always
+  networks:
+    - app-network
+  volumes:
+    - .:/app
+    - ./backups:/backups
+  environment:
+    - PYTHONPATH=/app
+    - TZ=Asia/Almaty
+  env_file:
+    - .env
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_started
+
 services:
-  # Сервис базы данных PostgreSQL
   db:
     image: postgres:14-alpine
     restart: always
@@ -16,72 +34,28 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - app-network
 
-  # Сервис Redis для Celery
   redis:
     image: redis:6-alpine
     restart: always
     environment:
       TZ: Asia/Almaty
-
-  # --- ЕДИНЫЙ СЕРВИС ДЛЯ ЗАПУСКА ВСЕХ БОТОВ ---
-  bots:
-    build: .
-    restart: always
     networks:
       - app-network
+
+  bots:
+    <<: *common-app-config
     command: python src/main.py
-    volumes:
-      - .:/app
-      - ./backups:/backups
-      - ./src:/app/src
-    environment:
-      - PYTHONPATH=/app
-      - TZ=Asia/Almaty
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
 
-  # Фоновый обработчик задач Celery
   celery_worker:
-    build: .
-    restart: always
+    <<: *common-app-config
     command: celery -A src.core.tasks.celery_app worker --loglevel=info
-    volumes:
-      - .:/app
-      - ./backups:/backups
-    environment:
-      - PYTHONPATH=/app
-      - TZ=Asia/Almaty
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
 
-  # Планировщик задач Celery Beat
   celery_beat:
-    build: .
-    restart: always
+    <<: *common-app-config
     command: celery -A src.core.tasks.celery_app beat --loglevel=info
-    volumes:
-      - .:/app
-    environment:
-      - PYTHONPATH=/app
-      - TZ=Asia/Almaty
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
 
 networks:
   app-network:
