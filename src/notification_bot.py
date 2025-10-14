@@ -16,6 +16,7 @@ from src.core import config
 from src.core.db import data_access as db_data
 from src.core.db.utils import get_db_connection
 from src.core import tasks
+from telegram.request import HTTPXRequest
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +120,21 @@ def setup_notification_bot() -> Application:
     Returns:
         Application: Сконфигурированное приложение Telegram бота
     """
+
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+
     application = (
         Application.builder()
         .token(config.NOTIFICATION_BOT_TOKEN)
         .connect_timeout(10)
         .read_timeout(20)
+        .request(request)
         .build()
     )
 

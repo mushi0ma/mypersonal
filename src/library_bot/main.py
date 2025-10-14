@@ -22,6 +22,7 @@ from src.library_bot.handlers import (
     books,
     help as help_handler,
 )
+from telegram.request import HTTPXRequest
 
 # Настройка логирования
 logging.basicConfig(
@@ -37,6 +38,15 @@ logger.addHandler(handler)
 
 async def main() -> None:
     """Запускает основного бота с всеми исправлениями."""
+
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+
     application = (
         Application.builder()
         .token(config.TELEGRAM_BOT_TOKEN)

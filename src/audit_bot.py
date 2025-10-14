@@ -4,6 +4,7 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from src.core import config
+from telegram.request import HTTPXRequest
 
 # Настройка логирования
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -19,11 +20,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main() -> None:
     """Запускает бота-аудитора."""
+
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+
     application = (
         Application.builder()
         .token(config.ADMIN_NOTIFICATION_BOT_TOKEN)
         .connect_timeout(10)
         .read_timeout(20)
+        .request(request)
         .build()
     )
     application.add_handler(CommandHandler("start", start))

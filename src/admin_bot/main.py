@@ -13,6 +13,7 @@ from telegram.ext import (
 from src.core import config
 from src.admin_bot.handlers import stats, books, broadcast, start
 from src.admin_bot.states import AdminState
+from telegram.request import HTTPXRequest
 
 # --- Настройка логгера ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -23,11 +24,21 @@ admin_filter = filters.User(user_id=config.ADMIN_TELEGRAM_ID)
 
 async def main() -> None:
     """Запускает админ-бота с всеми новыми функциями."""
+
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+    
     application = (
         Application.builder()
         .token(config.ADMIN_BOT_TOKEN)
         .connect_timeout(10)
         .read_timeout(20)
+        .request(request)
         .build()
     )
 
