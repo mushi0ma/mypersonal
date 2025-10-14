@@ -616,3 +616,16 @@ async def get_books_by_author(conn: asyncpg.Connection, author_id: int, limit: i
         ORDER BY b.name LIMIT $2 OFFSET $3
     """, author_id, limit, offset)
     return _records_to_list_of_dicts(rows), total or 0
+
+async def check_telegram_id_exists(conn: asyncpg.Connection, telegram_id: int) -> dict | None:
+    """
+    Проверяет, существует ли уже пользователь с данным telegram_id.
+    
+    Returns:
+        dict: Данные пользователя если найден, None если не найден
+    """
+    row = await conn.fetchrow(
+        "SELECT id, username, full_name FROM users WHERE telegram_id = $1",
+        telegram_id
+    )
+    return _record_to_dict(row) if row else None

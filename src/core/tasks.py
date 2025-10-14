@@ -104,18 +104,40 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
         if conn:
             await conn.close()
 
+def escape_markdown(text: str) -> str:
+    """
+    Экранирует специальные символы для Telegram Markdown.
+    Предотвращает ошибки парсинга entities.
+    """
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in escape_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+
 async def _async_notify_admin(text: str, category: str = 'audit', user_id: int | None = None):
-    """Улучшенная логика отправки уведомлений админу с Telegram ID и кнопками."""
+    """Улучшенная логика отправки уведомлений админу с безопасным форматированием."""
     try:
         admin_notifier_bot = create_telegram_bot(config.ADMIN_NOTIFICATION_BOT_TOKEN)
         
         timestamp = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
-        formatted_text = (
+        
+        # Безопасное форматирование: разделяем статичную и динамическую части
+        header = (
             f"🔔 **Уведомление:** `{category}`\n"
             f"🕐 **Время:** `{timestamp}`\n"
             f"{'─' * 30}\n"
-            f"{text}"
         )
+        
+        # Для динамического текста используем экранирование
+        # Проверяем, содержит ли текст уже markdown-блоки кода
+        if '```' in text:
+            # Текст уже содержит code block - отправляем как есть
+            formatted_text = header + text
+        else:
+            # Экранируем спецсимволы в обычном тексте
+            safe_text = escape_markdown(text)
+            formatted_text = header + safe_text
         
         reply_markup = None
         if user_id:
@@ -125,14 +147,34 @@ async def _async_notify_admin(text: str, category: str = 'audit', user_id: int |
             ]]
             reply_markup = telegram.InlineKeyboardMarkup(keyboard)
 
-        await admin_notifier_bot.send_message(
-            chat_id=config.ADMIN_TELEGRAM_ID,
-            text=formatted_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
-        
-        logger.info(f"Аудит-уведомление '{category}' для админа отправлено.")
+        try:
+            await admin_notifier_bot.send_message(
+                chat_id=config.ADMIN_TELEGRAM_ID,
+                text=formatted_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            logger.info(f"Аудит-уведомление '{category}' для админа отправлено.")
+            
+        except telegram.error.BadRequest as e:
+            # Если всё ещё ошибка парсинга - отправляем без форматирования
+            if "can't parse entities" in str(e).lower():
+                logger.warning(f"Ошибка парсинга Markdown, отправляем plain text: {e}")
+                plain_text = (
+                    f"🔔 Уведомление: {category}\n"
+                    f"🕐 Время: {timestamp}\n"
+                    f"{'─' * 30}\n"
+                    f"{text}"
+                )
+                await admin_notifier_bot.send_message(
+                    chat_id=config.ADMIN_TELEGRAM_ID,
+                    text=plain_text,
+                    reply_markup=reply_markup
+                )
+                logger.info("Уведомление отправлено в plain text режиме.")
+            else:
+                raise
+                
     except telegram.error.TimedOut:
         logger.warning(f"Таймаут при отправке уведомления админу. Категория: {category}")
     except Exception as e:

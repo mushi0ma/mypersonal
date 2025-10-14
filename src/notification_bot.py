@@ -21,12 +21,10 @@ from telegram.request import HTTPXRequest
 logger = logging.getLogger(__name__)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     """
     Обрабатывает команду /start с deep link для привязки аккаунта.
     Deep link формат: /start <registration_code>
     """
-
     user = update.effective_user
 
     # Проверяем наличие кода регистрации в аргументах
@@ -35,6 +33,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             async with get_db_connection() as conn:
+                # НОВОЕ: Сначала проверяем, не привязан ли уже этот telegram_id
+                existing_user = await conn.fetchrow(
+                    "SELECT id, username FROM users WHERE telegram_id = $1",
+                    user.id
+                )
+                
+                if existing_user:
+                    # Telegram ID уже используется
+                    await update.message.reply_text(
+                        "⚠️ **Этот Telegram-аккаунт уже зарегистрирован**\n\n"
+                        f"Ваш аккаунт привязан к пользователю: `{existing_user['username']}`\n\n"
+                        "**Что делать:**\n"
+                        "• Если это ваш аккаунт — всё в порядке, используйте его\n"
+                        "• Если вы хотите создать новый профиль — используйте другой Telegram\n"
+                        "• Если считаете, что произошла ошибка — обратитесь к администратору\n\n"
+                        "_Код регистрации не был использован._",
+                        parse_mode='Markdown'
+                    )
+                    logger.warning(
+                        f"⚠️ Попытка повторной привязки: telegram_id={user.id} "
+                        f"уже принадлежит user_id={existing_user['id']} "
+                        f"(username={existing_user['username']}), код={registration_code}"
+                    )
+                    
+                    # Уведомляем админа о подозрительной активности
+                    tasks.notify_admin.delay(
+                        text=(
+                            f"⚠️ **Попытка повторной привязки Telegram**\n\n"
+                            f"**Telegram ID:** `{user.id}`\n"
+                            f"**Username:** @{user.username or 'N/A'}\n"
+                            f"**Уже привязан к:** `{existing_user['username']}` (ID: {existing_user['id']})\n"
+                            f"**Попытка использовать код:** `{registration_code}`"
+                        ),
+                        category='security'
+                    )
+                    return
+                
                 # Привязываем telegram_id к аккаунту по коду
                 await db_data.link_telegram_id_by_code(
                     conn,
@@ -71,7 +106,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
             logger.warning(
-                f"⚠️  Попытка использования неверного кода: "
+                f"⚠️ Попытка использования неверного кода: "
                 f"user_id={user.id}, code={registration_code}"
             )
             
@@ -84,13 +119,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"❌ Ошибка привязки: user_id={user.id}, code={registration_code}",
                 exc_info=True
             )
+            
+            # Безопасное форматирование ошибки для Telegram
+            error_msg = str(e).replace('_', '\\_').replace('*', '\\*').replace('[', '\\[')
             tasks.notify_admin.delay(
                 text=(
-                    f"❗️ **Критическая ошибка в notification_bot**\n\n"
+                    f"❗️ **Критическая ошибка в notification\\_bot**\n\n"
                     f"**User ID:** `{user.id}`\n"
                     f"**Username:** @{user.username or 'N/A'}\n"
                     f"**Код:** `{registration_code}`\n"
-                    f"**Ошибка:** `{e}`"
+                    f"**Ошибка:**\n```\n{error_msg[:200]}\n```"
                 ),
                 category='error'
             )
@@ -103,6 +141,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "завершите регистрацию в основном боте библиотеки.",
             parse_mode='Markdown'
         )
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает справку по боту."""
     await update.message.reply_text(
