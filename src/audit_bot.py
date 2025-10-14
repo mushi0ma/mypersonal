@@ -32,8 +32,6 @@ async def main() -> None:
     application = (
         Application.builder()
         .token(config.ADMIN_NOTIFICATION_BOT_TOKEN)
-        .connect_timeout(10)
-        .read_timeout(20)
         .request(request)
         .build()
     )

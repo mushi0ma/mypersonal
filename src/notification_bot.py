@@ -132,8 +132,6 @@ def setup_notification_bot() -> Application:
     application = (
         Application.builder()
         .token(config.NOTIFICATION_BOT_TOKEN)
-        .connect_timeout(10)
-        .read_timeout(20)
         .request(request)
         .build()
     )
