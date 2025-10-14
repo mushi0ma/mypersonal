@@ -7,6 +7,7 @@ import asyncpg
 from celery import Celery
 from celery.schedules import crontab
 import telegram
+from telegram.request import HTTPXRequest
 from src.core.db import data_access as db_data
 from datetime import datetime
 from celery import group
@@ -33,6 +34,27 @@ celery_app.conf.task_annotations = {
     'src.core.tasks.broadcast_new_book': {'rate_limit': '1/m', 'time_limit': 600},
 }
 
+# --- КОНФИГУРАЦИЯ TELEGRAMБОТОВ С ТАЙМАУТАМИ ---
+
+def create_telegram_bot(token: str) -> telegram.Bot:
+    """
+    Создает экземпляр Telegram бота с оптимизированными таймаутами.
+    
+    Args:
+        token: Токен бота
+        
+    Returns:
+        Настроенный экземпляр telegram.Bot
+    """
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0,
+        pool_timeout=30.0
+    )
+    return telegram.Bot(token=token, request=request)
+
 # --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СОЗДАНИЯ СОЕДИНЕНИЯ ---
 
 async def get_connection():
@@ -51,7 +73,7 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
     """Асинхронная логика для отправки уведомления пользователю."""
     conn = None
     try:
-        user_notifier_bot = telegram.Bot(token=config.NOTIFICATION_BOT_TOKEN)
+        user_notifier_bot = create_telegram_bot(config.NOTIFICATION_BOT_TOKEN)
         
         # Создаем новое соединение для этой задачи
         conn = await get_connection()
@@ -73,6 +95,9 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
         logger.info(f"Уведомление '{category}' для user_id={user_id} отправлено на telegram_id={telegram_id}.")
     except db_data.NotFoundError:
         logger.warning(f"Не удалось отправить уведомление: telegram_id для user_id={user_id} не найден.")
+    except telegram.error.TimedOut:
+        logger.warning(f"Таймаут при отправке уведомления user_id={user_id}. Повторная попытка...")
+        # Здесь можно добавить retry-логику если нужно
     except Exception as e:
         logger.error(f"Ошибка в _async_notify_user для user_id={user_id}: {e}", exc_info=True)
     finally:
@@ -82,7 +107,7 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
 async def _async_notify_admin(text: str, category: str = 'audit', user_id: int | None = None):
     """Улучшенная логика отправки уведомлений админу с Telegram ID и кнопками."""
     try:
-        admin_notifier_bot = telegram.Bot(token=config.ADMIN_NOTIFICATION_BOT_TOKEN)
+        admin_notifier_bot = create_telegram_bot(config.ADMIN_NOTIFICATION_BOT_TOKEN)
         
         timestamp = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
         formatted_text = (
@@ -108,21 +133,31 @@ async def _async_notify_admin(text: str, category: str = 'audit', user_id: int |
         )
         
         logger.info(f"Аудит-уведомление '{category}' для админа отправлено.")
+    except telegram.error.TimedOut:
+        logger.warning(f"Таймаут при отправке уведомления админу. Категория: {category}")
     except Exception as e:
         logger.error(f"Ошибка в _async_notify_admin: {e}", exc_info=True)
 
 
 # --- СИНХРОННЫЕ ОБЕРТКИ ДЛЯ CELERY ---
 
-@celery_app.task
-def notify_user(user_id: int, text: str, category: str = 'system', button_text: str = None, button_callback: str = None):
+@celery_app.task(bind=True, max_retries=3)
+def notify_user(self, user_id: int, text: str, category: str = 'system', button_text: str = None, button_callback: str = None):
     """Синхронная Celery задача, которая запускает асинхронную логику."""
-    asyncio.run(_async_notify_user(user_id, text, category, button_text, button_callback))
+    try:
+        asyncio.run(_async_notify_user(user_id, text, category, button_text, button_callback))
+    except Exception as exc:
+        logger.error(f"Ошибка в notify_user для user_id={user_id}: {exc}")
+        raise self.retry(exc=exc, countdown=60)
 
-@celery_app.task
-def notify_admin(text: str, category: str = 'audit', user_id: int | None = None):
+@celery_app.task(bind=True, max_retries=3)
+def notify_admin(self, text: str, category: str = 'audit', user_id: int | None = None):
     """Синхронная Celery задача для отправки уведомления админу."""
-    asyncio.run(_async_notify_admin(text, category, user_id))
+    try:
+        asyncio.run(_async_notify_admin(text, category, user_id))
+    except Exception as exc:
+        logger.error(f"Ошибка в notify_admin: {exc}")
+        raise self.retry(exc=exc, countdown=60)
 
 
 # --- ВЫСОКОУРОВНЕВЫЕ И ПЕРИОДИЧЕСКИЕ ЗАДАЧИ ---
