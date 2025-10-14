@@ -24,8 +24,7 @@ function Write-Error { Write-Host $args -ForegroundColor Red }
 # ВНУТРЕННИЕ HELPER-ФУНКЦИИ (для переиспользования кода)
 # ============================================================================
 
-# Эта функция инкапсулирует логику полного сброса и инициализации БД
-function _Initialize-Database {
+function Initialize-Database {
     Write-Info ">>> Запуск базы данных..."
     & $DOCKER_COMPOSE up -d $DB_SERVICE
     
@@ -36,9 +35,8 @@ function _Initialize-Database {
     & $DOCKER_COMPOSE run --rm $BOTS_SERVICE python src/init_db.py
 }
 
-
 # ============================================================================
-# ОСНОВНЫE КОМАНДЫ
+# ОСНОВНЫЕ КОМАНДЫ
 # ============================================================================
 
 function Show-Help {
@@ -57,6 +55,16 @@ function Show-Help {
     Write-Host "  logs [svc..]     " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи всех или указанных сервисов (напр. 'dk logs bots db')"
     Write-Host "  ps               " -ForegroundColor Yellow -NoNewline; Write-Host "Показать статус запущенных контейнеров"
     Write-Host "  status           " -ForegroundColor Yellow -NoNewline; Write-Host "Показать детальный статус проекта (контейнеры, образы, volumes)"
+    Write-Host ""
+    Write-Host "--- Управление Celery ---"
+    Write-Host "  celery-restart   " -ForegroundColor Yellow -NoNewline; Write-Host "Перезапустить Celery worker и beat"
+    Write-Host "  celery-logs      " -ForegroundColor Yellow -NoNewline; Write-Host "Показать логи Celery (worker + beat)"
+    Write-Host "  celery-status    " -ForegroundColor Yellow -NoNewline; Write-Host "Проверить статус задач Celery"
+    Write-Host ""
+    Write-Host "--- Управление Redis ---"
+    Write-Host "  redis-cli        " -ForegroundColor Yellow -NoNewline; Write-Host "Открыть Redis CLI для отладки"
+    Write-Host "  redis-flush      " -ForegroundColor Yellow -NoNewline; Write-Host "Очистить все данные Redis (кэш, очереди)"
+    Write-Host "  redis-info       " -ForegroundColor Yellow -NoNewline; Write-Host "Показать информацию о Redis (память, ключи)"
     Write-Host ""
     Write-Host "--- Взаимодействие и утилиты ---"
     Write-Host "  shell            " -ForegroundColor Yellow -NoNewline; Write-Host "Открыть интерактивную shell-сессию в контейнере ботов"
@@ -106,6 +114,26 @@ function Invoke-Status {
     Write-Host ""; Write-Success "=== Docker volumes проекта ==="; docker volume ls | Select-String "mypersonal"
 }
 
+# --- Управление Celery ---
+function Invoke-CeleryRestart {
+    Write-Info ">>> Перезапуск Celery (worker + beat)..."
+    & $DOCKER_COMPOSE restart $CELERY_WORKER $CELERY_BEAT
+    Write-Success "✓ Celery перезапущен!"
+}
+
+function Invoke-CeleryLogs {
+    Write-Info ">>> Логи Celery (worker + beat)..."
+    & $DOCKER_COMPOSE logs -f $CELERY_WORKER $CELERY_BEAT
+}
+
+function Invoke-CeleryStatus {
+    Write-Info ">>> Проверка статуса Celery..."
+    & $DOCKER_COMPOSE exec $CELERY_WORKER celery -A src.core.tasks.celery_app inspect active
+    Write-Host ""
+    Write-Info ">>> Зарегистрированные задачи:"
+    & $DOCKER_COMPOSE exec $CELERY_WORKER celery -A src.core.tasks.celery_app inspect registered
+}
+
 # --- Взаимодействие и утилиты ---
 function Invoke-Shell { & $DOCKER_COMPOSE exec $BOTS_SERVICE /bin/bash }
 function Invoke-Test { & $DOCKER_COMPOSE run --rm $BOTS_SERVICE pytest tests/ }
@@ -121,21 +149,28 @@ function Invoke-Run {
 
 # --- Управление Базой Данных ---
 function Invoke-DbShell {
-    $dbName = $env:DB_NAME; if (-not $dbName) { $dbName = "library_db" }
+    $dbName = $env:DB_NAME
+    if (-not $dbName) { $dbName = "library_db" }
     & $DOCKER_COMPOSE exec $DB_SERVICE psql -U postgres -d $dbName
 }
 
 function Invoke-DbBackup {
-    Write-Info ">>> Создание бэкапа..."; New-Item -ItemType Directory -Force -Path "backups" | Out-Null
-    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"; $dbName = $env:DB_NAME; if (-not $dbName) { $dbName = "library_db" }
+    Write-Info ">>> Создание бэкапа..."
+    New-Item -ItemType Directory -Force -Path "backups" | Out-Null
+    
+    $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $dbName = $env:DB_NAME
+    if (-not $dbName) { $dbName = "library_db" }
+    
     $containerId = (& $DOCKER_COMPOSE ps -q $DB_SERVICE)
     docker exec $containerId pg_dump -U postgres $dbName > "backups/backup_$timestamp.sql"
-    Write-Success "✓ Бэкап создан в папке backups/"
+    Write-Success "✓ Бэкап создан: backups/backup_$timestamp.sql"
 }
 
 function Invoke-DbRestore {
     Write-Info ">>> Восстановление базы данных из последнего бэкапа..."
     $latestBackup = Get-ChildItem -Path "backups" -Filter "*.sql" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    
     if (-not $latestBackup) {
         Write-Error "Бэкапы не найдены в папке /backups"
         return
@@ -143,29 +178,28 @@ function Invoke-DbRestore {
 
     Write-Warning "Найден последний бэкап: $($latestBackup.Name)"
     Write-Error "Текущая база данных будет полностью УДАЛЕНА и заменена данными из бэкапа!"
-    Read-Host -Prompt "Нажмите Enter для продолжения..."
+    Read-Host -Prompt "Нажмите Enter для продолжения или Ctrl+C для отмены"
 
-    # Эта часть в вашем скрипте была немного неоптимальной, я ее улучшил
     Write-Info ">>> Пересоздание сервиса БД..."
     & $DOCKER_COMPOSE rm -sfv $DB_SERVICE
-    docker volume rm $(docker volume ls -q | Where-Object { $_ -like "*_db_data" }) | Out-Null
+    docker volume rm $(docker volume ls -q | Where-Object { $_ -like "*_db_data" }) 2>$null
     
-    Invoke-DbStart
-    Write-Warning "Ожидание запуска БД (15 секунд)..."
+    Write-Info ">>> Запуск нового контейнера БД..."
+    & $DOCKER_COMPOSE up -d $DB_SERVICE
+    
+    Write-Warning ">>> Ожидание запуска БД (15 секунд)..."
     Start-Sleep -Seconds 15
 
     $dbName = $env:DB_NAME
     if (-not $dbName) { $dbName = "library_db" }
     
     Write-Info ">>> Загрузка данных из бэкапа..."
-    # Вот исправленная строка:
-    Get-Content $latestBackup.FullName | docker exec -i $( & $DOCKER_COMPOSE ps -q $DB_SERVICE ) psql -U postgres -d $dbName
+    Get-Content $latestBackup.FullName | docker exec -i $(& $DOCKER_COMPOSE ps -q $DB_SERVICE) psql -U postgres -d $dbName
     
     Write-Success "✓ База данных успешно восстановлена из файла $($latestBackup.Name)!"
 }
 
 # --- Полная перезагрузка и деплой ---
-
 function Invoke-Recreate {
     Write-Info ">>> ✨ Полное пересоздание проекта с нуля..."
     
@@ -175,8 +209,8 @@ function Invoke-Recreate {
     Write-Info "Шаг 2: Сборка свежих образов..."
     & $DOCKER_COMPOSE build
     
-    # Шаг 3: Используем хелпер для инициализации БД
-    _Initialize-Database
+    Write-Info "Шаг 3: Инициализация базы данных..."
+    Initialize-Database
     
     Write-Info "Шаг 4: Запуск всех остальных сервисов..."
     & $DOCKER_COMPOSE up -d
@@ -187,6 +221,7 @@ function Invoke-Recreate {
 
 function Invoke-Deploy {
     Write-Info ">>> Деплой обновлений кода (БД не затрагивается)..."
+    
     Write-Warning "Остановка текущих сервисов..."
     & $DOCKER_COMPOSE down
     
@@ -195,15 +230,17 @@ function Invoke-Deploy {
     
     Write-Info "Запуск обновленных сервисов..."
     & $DOCKER_COMPOSE up -d
+    
     Write-Success "✓ Деплой завершен!"
+    & $DOCKER_COMPOSE ps
 }
 
 # --- Очистка ---
-
 function Invoke-Prune {
     Write-Warning ">>> 🗑️  Полная очистка Docker от неиспользуемых данных..."
     Write-Error "Будут удалены все остановленные контейнеры, неиспользуемые сети, dangling-образы и кэш сборки."
-    Read-Host -Prompt "Нажмите Enter для продолжения..."
+    Read-Host -Prompt "Нажмите Enter для продолжения или Ctrl+C для отмены"
+    
     docker system prune -af
     Write-Success "✓ Система Docker очищена!"
 }
@@ -226,6 +263,11 @@ switch ($Command.ToLower()) {
     "logs" { Invoke-Logs }
     "ps" { Invoke-Ps }
     "status" { Invoke-Status }
+
+    # Celery
+    "celery-restart" { Invoke-CeleryRestart }
+    "celery-logs" { Invoke-CeleryLogs }
+    "celery-status" { Invoke-CeleryStatus }
 
     # Взаимодействие
     "shell" { Invoke-Shell }
