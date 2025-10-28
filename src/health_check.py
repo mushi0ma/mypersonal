@@ -200,11 +200,18 @@ async def check_disk_space() -> Tuple[bool, str, Dict[str, Any]]:
         Tuple[bool, str, Dict]: (успех, сообщение, метрики диска)
     """
     import shutil
+    import platform
     
     metrics = {}
     try:
+        # Определяем путь в зависимости от ОС
+        if platform.system() == 'Windows':
+            path = os.getenv('SystemDrive', 'C:') + '\\'
+        else:
+            path = "/"
+        
         # Проверяем корневой раздел
-        total, used, free = shutil.disk_usage("/")
+        total, used, free = shutil.disk_usage(path)
         
         metrics['total_gb'] = round(total / (1024**3), 2)
         metrics['used_gb'] = round(used / (1024**3), 2)
