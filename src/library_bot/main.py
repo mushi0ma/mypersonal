@@ -1,7 +1,11 @@
-# src/librarybot.py
+# src/library_bot/main.py
 import asyncio
 import logging
+import traceback
+import html
+import json
 from logging.handlers import RotatingFileHandler
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -9,10 +13,11 @@ from telegram.ext import (
     ConversationHandler,
     MessageHandler,
     filters,
+    ContextTypes
 )
 
 # --- Локальные импорты из новой структуры ---
-from src.core import config # ✅ Импортируем конфиг
+from src.core import config
 from src.library_bot.states import State
 from src.library_bot.handlers import (
     start,
@@ -35,6 +40,32 @@ handler.setFormatter(
 )
 logger.addHandler(handler)
 
+# --- Глобальный обработчик ошибок ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Логирует ошибки и отправляет детальный отчет администратору.
+    """
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    # Формируем отчет об ошибке
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+    update_str = update.to_dict() if isinstance(update, Update) else str(update)
+
+    message = (
+        f"An exception was raised in the Library Bot\n"
+        f"<pre>update = {html.escape(json.dumps(update_str, indent=2, ensure_ascii=False))}"
+        "</pre>\n\n"
+        f"<pre>context.chat_data = {html.escape(str(context.chat_data))}</pre>\n\n"
+        f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n\n"
+        f"<pre>{html.escape(tb_string)}</pre>"
+    )
+
+    # Отправляем трассировку администратору
+    await context.bot.send_message(
+        chat_id=config.ADMIN_TELEGRAM_ID, text=message, parse_mode='HTML'
+    )
+
 
 async def main() -> None:
     """Запускает основного бота с всеми исправлениями."""
@@ -52,6 +83,9 @@ async def main() -> None:
         .token(config.TELEGRAM_BOT_TOKEN)
         .build()
     )
+
+    # --- Регистрация обработчика ошибок ---
+    application.add_error_handler(error_handler)
 
     # --- Основной ConversationHandler ---
     conv_handler = ConversationHandler(

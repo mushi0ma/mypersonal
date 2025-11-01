@@ -2,7 +2,7 @@
 
 import logging
 import random
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes,
     ConversationHandler,
@@ -17,7 +17,7 @@ from src.core import tasks
 from src.library_bot.states import State
 from src.library_bot.utils import get_user_borrow_limit, normalize_phone_number
 from src.library_bot import keyboards
-from src.library_bot.handlers.registration import send_verification_message # Переиспользуем
+from src.library_bot.handlers.registration import send_verification_message
 
 logger = logging.getLogger(__name__)
 
