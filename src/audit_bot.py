@@ -1,4 +1,4 @@
-# audit_bot.py
+
 import asyncio
 import logging
 from telegram import Update
@@ -6,7 +6,6 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from src.core import config
 from telegram.request import HTTPXRequest
 
-# Настройка логирования
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
