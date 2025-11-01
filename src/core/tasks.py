@@ -1,4 +1,9 @@
 # src/core/tasks.py
+"""
+This module defines asynchronous background tasks managed by Celery.
+These tasks include sending notifications, database maintenance, and periodic checks.
+The use of Celery allows the main application to remain responsive by offloading long-running operations.
+"""
 import os
 import logging
 import asyncio
@@ -15,36 +20,35 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from src.core import config
 
+# --- Logging Configuration ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Настройка Celery ---
+# --- Celery Application Setup ---
 celery_app = Celery(
     'tasks',
     broker=config.CELERY_BROKER_URL,
     backend=config.CELERY_RESULT_BACKEND
 )
-
 celery_app.conf.update(
     task_always_eager=config.CELERY_TASK_ALWAYS_EAGER
 )
-
 celery_app.conf.task_annotations = {
     'src.core.tasks.notify_user': {'rate_limit': '10/s', 'time_limit': 30},
     'src.core.tasks.broadcast_new_book': {'rate_limit': '1/m', 'time_limit': 600},
 }
 
-# --- КОНФИГУРАЦИЯ TELEGRAMБОТОВ С ТАЙМАУТАМИ ---
+# --- Telegram Bot Configuration ---
 
 def create_telegram_bot(token: str) -> telegram.Bot:
     """
-    Создает экземпляр Telegram бота с оптимизированными таймаутами.
-    
+    Creates and configures a `telegram.Bot` instance with optimized timeouts.
+
     Args:
-        token: Токен бота
-        
+        token: The Telegram API token for the bot.
+
     Returns:
-        Настроенный экземпляр telegram.Bot
+        A configured `telegram.Bot` instance.
     """
     request = HTTPXRequest(
         connection_pool_size=8,
@@ -55,10 +59,16 @@ def create_telegram_bot(token: str) -> telegram.Bot:
     )
     return telegram.Bot(token=token, request=request)
 
-# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ДЛЯ СОЗДАНИЯ СОЕДИНЕНИЯ ---
+# --- Database Connection Helper ---
 
 async def get_connection():
-    """Создает новое соединение с БД для каждой задачи."""
+    """
+    Establishes a new asynchronous connection to the database.
+    Each Celery task should use its own connection to ensure process safety.
+
+    Returns:
+        An `asyncpg.Connection` object.
+    """
     return await asyncpg.connect(
         database=config.DB_NAME,
         user=config.DB_USER,
@@ -67,15 +77,15 @@ async def get_connection():
         port=config.DB_PORT
     )
 
-# --- АСИНХРОННЫЕ ВЕРСИИ НИЗКОУРОВНЕВЫХ ЗАДАЧ ---
+# --- Core Asynchronous Task Logic ---
 
 async def _async_notify_user(user_id: int, text: str, category: str, button_text: str | None, button_callback: str | None):
-    """Асинхронная логика для отправки уведомления пользователю."""
+    """
+    Handles the asynchronous logic of sending a notification to a single user.
+    """
     conn = None
     try:
         user_notifier_bot = create_telegram_bot(config.NOTIFICATION_BOT_TOKEN)
-        
-        # Создаем новое соединение для этой задачи
         conn = await get_connection()
         
         await db_data.create_notification(conn, user_id=user_id, text=text, category=category)
@@ -87,57 +97,42 @@ async def _async_notify_user(user_id: int, text: str, category: str, button_text
             reply_markup = telegram.InlineKeyboardMarkup(keyboard)
 
         await user_notifier_bot.send_message(
-            chat_id=telegram_id,
-            text=text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
+            chat_id=telegram_id, text=text, parse_mode='Markdown', reply_markup=reply_markup
         )
-        logger.info(f"Уведомление '{category}' для user_id={user_id} отправлено на telegram_id={telegram_id}.")
+        logger.info(f"Notification '{category}' for user_id={user_id} sent to telegram_id={telegram_id}.")
     except db_data.NotFoundError:
-        logger.warning(f"Не удалось отправить уведомление: telegram_id для user_id={user_id} не найден.")
+        logger.warning(f"Failed to send notification: telegram_id for user_id={user_id} not found.")
+    except telegram.error.Forbidden:
+        logger.warning(f"Failed to send notification to user_id={user_id}: Bot was blocked by the user.")
     except telegram.error.TimedOut:
-        logger.warning(f"Таймаут при отправке уведомления user_id={user_id}. Повторная попытка...")
-        # Здесь можно добавить retry-логику если нужно
+        logger.warning(f"Timeout while sending notification to user_id={user_id}. Retrying might be necessary.")
+    except telegram.error.TelegramError as e:
+        logger.error(f"A Telegram error occurred while notifying user_id={user_id}: {e}", exc_info=True)
+    except asyncpg.PostgresError as e:
+        logger.error(f"A database error occurred while notifying user_id={user_id}: {e}", exc_info=True)
     except Exception as e:
-        logger.error(f"Ошибка в _async_notify_user для user_id={user_id}: {e}", exc_info=True)
+        logger.error(f"An unexpected error occurred in _async_notify_user for user_id={user_id}: {e}", exc_info=True)
     finally:
         if conn:
             await conn.close()
 
 def escape_markdown(text: str) -> str:
     """
-    Экранирует специальные символы для Telegram Markdown.
-    Предотвращает ошибки парсинга entities.
+    Escapes special characters in text to be compatible with Telegram's MarkdownV2 parsing.
     """
-    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    for char in escape_chars:
-        text = text.replace(char, f'\\{char}')
-    return text
-
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
 
 async def _async_notify_admin(text: str, category: str = 'audit', user_id: int | None = None):
-    """Улучшенная логика отправки уведомлений админу с безопасным форматированием."""
+    """
+    Handles the asynchronous logic of sending a formatted notification to the administrator.
+    """
     try:
         admin_notifier_bot = create_telegram_bot(config.ADMIN_NOTIFICATION_BOT_TOKEN)
-        
         timestamp = datetime.now().strftime('%d.%m.%Y %H:%M:%S')
         
-        # Безопасное форматирование: разделяем статичную и динамическую части
-        header = (
-            f"🔔 **Уведомление:** `{category}`\n"
-            f"🕐 **Время:** `{timestamp}`\n"
-            f"{'─' * 30}\n"
-        )
-        
-        # Для динамического текста используем экранирование
-        # Проверяем, содержит ли текст уже markdown-блоки кода
-        if '```' in text:
-            # Текст уже содержит code block - отправляем как есть
-            formatted_text = header + text
-        else:
-            # Экранируем спецсимволы в обычном тексте
-            safe_text = escape_markdown(text)
-            formatted_text = header + safe_text
+        header = f"🔔 **Уведомление:** `{category}`\n🕐 **Время:** `{timestamp}`\n{'─' * 30}\n"
+        formatted_text = header + (text if '```' in text else escape_markdown(text))
         
         reply_markup = None
         if user_id:
@@ -147,67 +142,57 @@ async def _async_notify_admin(text: str, category: str = 'audit', user_id: int |
             ]]
             reply_markup = telegram.InlineKeyboardMarkup(keyboard)
 
-        try:
+        await admin_notifier_bot.send_message(
+            chat_id=config.ADMIN_TELEGRAM_ID, text=formatted_text, parse_mode='Markdown', reply_markup=reply_markup
+        )
+        logger.info(f"Admin notification '{category}' sent successfully.")
+    except telegram.error.BadRequest as e:
+        if "can't parse entities" in str(e).lower():
+            logger.warning(f"Markdown parsing failed, sending as plain text: {e}")
+            plain_text = f"Notification: {category}\nTime: {timestamp}\n---\n{text}"
             await admin_notifier_bot.send_message(
-                chat_id=config.ADMIN_TELEGRAM_ID,
-                text=formatted_text,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
+                chat_id=config.ADMIN_TELEGRAM_ID, text=plain_text, reply_markup=reply_markup
             )
-            logger.info(f"Аудит-уведомление '{category}' для админа отправлено.")
-            
-        except telegram.error.BadRequest as e:
-            # Если всё ещё ошибка парсинга - отправляем без форматирования
-            if "can't parse entities" in str(e).lower():
-                logger.warning(f"Ошибка парсинга Markdown, отправляем plain text: {e}")
-                plain_text = (
-                    f"🔔 Уведомление: {category}\n"
-                    f"🕐 Время: {timestamp}\n"
-                    f"{'─' * 30}\n"
-                    f"{text}"
-                )
-                await admin_notifier_bot.send_message(
-                    chat_id=config.ADMIN_TELEGRAM_ID,
-                    text=plain_text,
-                    reply_markup=reply_markup
-                )
-                logger.info("Уведомление отправлено в plain text режиме.")
-            else:
-                raise
-                
+    except telegram.error.Forbidden:
+        logger.error(f"Failed to send admin notification: Bot might be blocked by the admin.")
     except telegram.error.TimedOut:
-        logger.warning(f"Таймаут при отправке уведомления админу. Категория: {category}")
+        logger.warning(f"Timeout sending admin notification for category: {category}")
+    except telegram.error.TelegramError as e:
+        logger.error(f"A Telegram error occurred while notifying admin: {e}", exc_info=True)
     except Exception as e:
-        logger.error(f"Ошибка в _async_notify_admin: {e}", exc_info=True)
+        logger.error(f"An unexpected error occurred in _async_notify_admin: {e}", exc_info=True)
 
-
-# --- СИНХРОННЫЕ ОБЕРТКИ ДЛЯ CELERY ---
+# --- Synchronous Celery Task Wrappers ---
 
 @celery_app.task(bind=True, max_retries=3)
 def notify_user(self, user_id: int, text: str, category: str = 'system', button_text: str = None, button_callback: str = None):
-    """Синхронная Celery задача, которая запускает асинхронную логику."""
+    """
+    Synchronous Celery task that wraps the async user notification logic.
+    """
     try:
         asyncio.run(_async_notify_user(user_id, text, category, button_text, button_callback))
     except Exception as exc:
-        logger.error(f"Ошибка в notify_user для user_id={user_id}: {exc}")
-        raise self.retry(exc=exc, countdown=60)
+        logger.error(f"Error in notify_user for user_id={user_id}: {exc}")
+        self.retry(exc=exc, countdown=60)
 
 @celery_app.task(bind=True, max_retries=3)
 def notify_admin(self, text: str, category: str = 'audit', user_id: int | None = None):
-    """Синхронная Celery задача для отправки уведомления админу."""
+    """
+    Synchronous Celery task that wraps the async admin notification logic.
+    """
     try:
         asyncio.run(_async_notify_admin(text, category, user_id))
     except Exception as exc:
-        logger.error(f"Ошибка в notify_admin: {exc}")
-        raise self.retry(exc=exc, countdown=60)
+        logger.error(f"Error in notify_admin: {exc}")
+        self.retry(exc=exc, countdown=60)
 
-
-# --- ВЫСОКОУРОВНЕВЫЕ И ПЕРИОДИЧЕСКИЕ ЗАДАЧИ ---
+# --- High-Level and Periodic Tasks ---
 
 async def _async_broadcast_new_book(book_id: int):
-    """Асинхронная логика рассылки о новой книге."""
-    logger.info(f"Запущена рассылка о новой книге с ID: {book_id}")
-    
+    """
+    Asynchronous logic for broadcasting a new book notification to all users.
+    """
+    logger.info(f"Starting new book broadcast for book_id: {book_id}")
     conn = None
     try:
         conn = await get_connection()
@@ -222,44 +207,37 @@ async def _async_broadcast_new_book(book_id: int):
     button_callback = f"view_book_{book_id}"
 
     BATCH_SIZE = 50
-    total_sent = 0
-
     for i in range(0, len(all_user_ids), BATCH_SIZE):
         batch = all_user_ids[i:i + BATCH_SIZE]
         job = group(
-            notify_user.s(
-                user_id=uid,
-                text=text,
-                category='new_arrival',
-                button_text=button_text,
-                button_callback=button_callback
-            ) for uid in batch
+            notify_user.s(user_id=uid, text=text, category='new_arrival', button_text=button_text, button_callback=button_callback)
+            for uid in batch
         )
         job.apply_async()
-        total_sent += len(batch)
-        logger.info(f"Отправлено {total_sent}/{len(all_user_ids)} уведомлений")
+        logger.info(f"Sent {i + len(batch)}/{len(all_user_ids)} notifications.")
 
-    logger.info(f"Рассылка о новой книге завершена для {total_sent} пользователей.")
-    notify_admin.delay(f"🚀 Успешно разослано уведомление о новой книге «{book['name']}» для {total_sent} пользователей.")
+    notify_admin.delay(f"🚀 New book broadcast for '{book['name']}' completed for {len(all_user_ids)} users.")
 
 @celery_app.task(bind=True, max_retries=3)
 def broadcast_new_book(self, book_id: int):
-    """Синхронная обертка для рассылки."""
+    """
+    Synchronous Celery wrapper for the new book broadcast task.
+    """
     try:
         asyncio.run(_async_broadcast_new_book(book_id))
     except SoftTimeLimitExceeded:
-        logger.error("Превышен лимит времени для рассылки")
+        logger.error("Broadcast task timed out, will retry.")
         self.retry(countdown=60)
     except Exception as e:
-        logger.error(f"Ошибка в задаче broadcast_new_book: {e}")
-        notify_admin.delay(f"❗️ Ошибка при рассылке о новой книге (ID: {book_id}): {e}")
-        raise self.retry(exc=e, countdown=30)
-
+        logger.error(f"Error in broadcast_new_book task: {e}")
+        notify_admin.delay(f"❗️ Error broadcasting new book (ID: {book_id}): {e}")
+        self.retry(exc=e, countdown=30)
 
 async def _async_check_due_dates():
-    """Асинхронная логика проверки сроков."""
-    logger.info("Выполняется периодическая задача: проверка сроков сдачи книг...")
-    
+    """
+    Asynchronous logic for checking book due dates and sending reminders.
+    """
+    logger.info("Running periodic task: checking book due dates...")
     conn = None
     try:
         conn = await get_connection()
@@ -269,110 +247,85 @@ async def _async_check_due_dates():
         if conn:
             await conn.close()
 
-    if overdue_entries:
-        logger.info(f"Найдено просроченных книг: {len(overdue_entries)}")
-        for entry in overdue_entries:
-            due_date_str = entry['due_date'].strftime('%d.%m.%Y')
-            user_text = f"❗️ **Просрочка:** Срок возврата «{entry['book_name']}» истек {due_date_str}! Пожалуйста, верните ее."
-            notify_user.delay(user_id=entry['user_id'], text=user_text, category='due_date')
-            admin_text = f"❗️Пользователь @{entry['username']} просрочил «{entry['book_name']}» (срок: {due_date_str})."
-            notify_admin.delay(text=admin_text, category='overdue')
+    for entry in overdue_entries:
+        user_text = f"❗️ **Просрочка:** Срок возврата «{entry['book_name']}» истек {entry['due_date'].strftime('%d.%m.%Y')}!"
+        notify_user.delay(user_id=entry['user_id'], text=user_text, category='due_date')
 
-    if due_soon_entries:
-        logger.info(f"Найдено книг с подходящим сроком возврата: {len(due_soon_entries)}")
-        for entry in due_soon_entries:
-            user_text = f"🔔 **Напоминание:** Срок возврата книги «{entry['book_name']}» истекает через 2 дня."
-            notify_user.delay(
-                user_id=entry['user_id'],
-                text=user_text,
-                category='due_date_reminder',
-                button_text="♻️ Продлить на 7 дней",
-                button_callback=f"extend_borrow_{entry['borrow_id']}"
-            )
-
-    if not overdue_entries and not due_soon_entries:
-        logger.info("Книг для отправки уведомлений не найдено.")
-
+    for entry in due_soon_entries:
+        user_text = f"🔔 **Напоминание:** Срок возврата «{entry['book_name']}» истекает через 2 дня."
+        notify_user.delay(user_id=entry['user_id'], text=user_text, category='due_date_reminder', button_text="♻️ Продлить на 7 дней", button_callback=f"extend_borrow_{entry['borrow_id']}")
 
 @celery_app.task
 def check_due_dates_and_notify():
-    """Синхронная обертка для проверки сроков."""
+    """
+    Synchronous Celery wrapper for the due date checking task.
+    """
     try:
         asyncio.run(_async_check_due_dates())
+    except asyncpg.PostgresError as e:
+        error_message = f"❗️ A database error occurred in `check_due_dates_and_notify`: {e}"
+        logger.error(error_message, exc_info=True)
+        notify_admin.delay(text=error_message, category='error')
     except Exception as e:
-        error_message = f"❗️ **Критическая ошибка в периодической задаче**\n\n`check_due_dates_and_notify`:\n`{e}`"
+        error_message = f"❗️ Critical error in periodic task `check_due_dates_and_notify`: {e}"
         logger.error(error_message, exc_info=True)
         notify_admin.delay(text=error_message, category='error')
 
-# --- ЗАДАЧИ РЕЗЕРВНОГО КОПИРОВАНИЯ И ПРОВЕРКИ ЗДОРОВЬЯ ---
+# --- Database Backup and Health Check Tasks ---
 
 def cleanup_old_backups(backup_dir, days=30):
-    """Удаляет бэкапы старше заданного количества дней."""
+    """
+    Removes database backups older than a specified number of days.
+    """
     import time
-
-    now = time.time()
-    cutoff = now - (days * 86400)
-
+    cutoff = time.time() - (days * 86400)
     for filename in os.listdir(backup_dir):
         if filename.startswith('backup_') and filename.endswith('.sql'):
             filepath = os.path.join(backup_dir, filename)
             if os.path.getmtime(filepath) < cutoff:
                 os.remove(filepath)
-                logger.info(f"🗑️ Удален старый backup: {filename}")
+                logger.info(f"🗑️ Deleted old backup: {filename}")
 
-def backup_database():
-    """Создает резервную копию базы данных PostgreSQL."""
+@celery_app.task
+def backup_database_task():
+    """
+    Performs a backup of the PostgreSQL database using pg_dump.
+    """
     try:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_dir = os.getenv('BACKUP_DIR', '/app/backups')
         os.makedirs(backup_dir, exist_ok=True)
         filename = f"{backup_dir}/backup_{timestamp}.sql"
 
-        command = [
-            'pg_dump',
-            '-h', os.getenv('DB_HOST', 'localhost'),
-            '-U', os.getenv('DB_USER', 'postgres'),
-            '-d', os.getenv('DB_NAME', 'library_db'),
-            '-f', filename,
-            '--no-password'
-        ]
+        command = ['pg_dump', '-h', config.DB_HOST, '-U', config.DB_USER, '-d', config.DB_NAME, '-f', filename, '--no-password']
+        env = {**os.environ, 'PGPASSWORD': config.DB_PASSWORD}
 
-        env = os.environ.copy()
-        env['PGPASSWORD'] = os.getenv('DB_PASSWORD', '')
+        result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
 
-        result = subprocess.run(command, env=env, capture_output=True, text=True)
-
-        if result.returncode == 0:
-            file_size = os.path.getsize(filename) / (1024 * 1024)
-            notify_admin.delay(
-                text=f"✅ **Backup успешно создан**\n\n"
-                     f"📁 Файл: `{filename}`\n"
-                     f"📊 Размер: {file_size:.2f} MB",
-                category='backup'
-            )
-            logger.info(f"✅ Backup успешно создан: {filename}")
-            cleanup_old_backups(backup_dir, days=30)
-            return filename
-        else:
-            error_msg = f"❌ Ошибка создания backup: {result.stderr}"
-            logger.error(error_msg)
-            notify_admin.delay(text=f"❌ **Ошибка создания backup**\n\n{result.stderr}", category='backup_error')
-            return None
-
-    except Exception as e:
-        error_msg = f"❌ Исключение при создании backup: {e}"
+        file_size_mb = os.path.getsize(filename) / (1024 * 1024)
+        notify_admin.delay(text=f"✅ **Backup created successfully**\n\n📁 File: `{filename}`\n📊 Size: {file_size_mb:.2f} MB", category='backup')
+        cleanup_old_backups(backup_dir)
+    except subprocess.CalledProcessError as e:
+        error_msg = f"❌ Backup creation failed with exit code {e.returncode}:\n{e.stderr}"
+        logger.error(error_msg)
+        notify_admin.delay(text=f"❌ **Backup creation error**\n\n{error_msg}", category='backup_error')
+    except FileNotFoundError as e:
+        error_msg = f"❌ Backup command not found: {e}. Is pg_dump installed and in the system's PATH?"
+        logger.error(error_msg)
+        notify_admin.delay(text=f"❌ **Backup configuration error**\n\n{error_msg}", category='backup_error')
+    except IOError as e:
+        error_msg = f"❌ A file system error occurred during backup: {e}"
         logger.error(error_msg, exc_info=True)
-        notify_admin.delay(text=f"❌ **Критическая ошибка backup**\n\n`{e}`", category='backup_error')
-        return None
-
-@celery_app.task
-def backup_database_task():
-    """Celery задача для backup базы данных."""
-    return backup_database()
+        notify_admin.delay(text=f"❌ **Backup file system error**\n\n`{e}`", category='backup_error')
+    except Exception as e:
+        logger.error(f"❌ An unhandled exception occurred during backup: {e}", exc_info=True)
+        notify_admin.delay(text=f"❌ **Critical backup error**\n\n`{e}`", category='backup_error')
 
 @celery_app.task
 def health_check_task():
-    """Периодическая проверка здоровья системы."""
+    """
+    Runs a periodic health check of the system's components.
+    """
     from src.health_check import run_health_check
     all_ok, message = asyncio.run(run_health_check())
     if not all_ok:
@@ -380,7 +333,8 @@ def health_check_task():
         notify_admin.delay(text=f"🌡️ **Health Check FAILED**\n\n`{message}`")
     return all_ok
 
-# --- Расписание для периодических задач (Celery Beat) ---
+# --- Celery Beat Schedule ---
+# Defines the schedule for periodic tasks.
 celery_app.conf.beat_schedule = {
     'check-due-dates-every-day': {
         'task': 'src.core.tasks.check_due_dates_and_notify',
